@@ -992,8 +992,8 @@ def process_sales_workbook(uploaded_file, separate_by_date=False):
 
 def ba_sales_report_page():
     """BA Sales Report page content"""
-    st.title("💰 BA Sales Report")
-    st.markdown("### Beauty Advisor Sales Analysis, Divided by Parent Brand")
+    st.title("💰 Laporan Sellout Beauty Advisor (BA)")
+    st.markdown("### Pembuat Laporan Sellout untuk Beauty Advisor (BA) dengan data dari ERP.")
     
     # Initialize session state for processed data
     if 'processed_workbooks' not in st.session_state:
@@ -1090,7 +1090,7 @@ def ba_sales_report_page():
             st.download_button(
                 label="📦 Download All Workbooks (ZIP)",
                 data=zip_bytes,
-                file_name="BA_Sales_Reports_All_Brands.zip",
+                file_name=f"Laporan Penjualan BA {datetime.now().strftime('%d%m%Y')}.zip",
                 mime="application/zip",
                 use_container_width=True,
                 type="primary"
@@ -1134,7 +1134,7 @@ def ba_sales_report_page():
     # Placeholder content if no file processed
     if not st.session_state.processing_summary and not uploaded_file:
         st.markdown("---")
-        st.info("👆 Please upload an Excel file to begin processing.")
+        st.info("👆 Upload Excel laporan penjualan ke sini.")
         
         st.markdown("---")
         st.subheader("📋 Expected File Format")
@@ -1150,7 +1150,7 @@ def ba_sales_report_page():
         """)
         
         st.markdown("---")
-        st.subheader("ℹ️ How It Works")
+        st.subheader("ℹ️ Cara Penggunaan")
         st.markdown("""
         1. **Upload**: Upload your Excel file with sales data
         2. **Process**: Click "Process File" to sort and group the data
@@ -1260,3 +1260,13 @@ def main():
 if __name__ == "__main__":
     main()
 
+
+    st.markdown(
+        """
+        <hr style="margin-top: 3em; margin-bottom: 0.5em;">
+        <div style="text-align: center; color: gray; font-size: 0.95em;">
+            Dibuat dengan ❤️, dari Tim Data NK.
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
