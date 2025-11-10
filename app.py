@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
+from openpyxl.styles import Font, PatternFill, Alignment
 import io
 import zipfile
 from datetime import datetime
@@ -175,8 +176,8 @@ def create_pivot_by_barcode(df_group):
         else:
             return f"{prefix}_{str(col_val)}"
     
-    pivot_qty.columns = [format_col_name("Quantity", col) for col in pivot_qty.columns]
-    pivot_revenue.columns = [format_col_name("Tax_Incl", col) for col in pivot_revenue.columns]
+    pivot_qty.columns = [format_col_name("Jumlah", col) for col in pivot_qty.columns]
+    pivot_revenue.columns = [format_col_name("Total", col) for col in pivot_revenue.columns]
     
     # Merge the two pivot tables
     pivot = pd.merge(
@@ -186,10 +187,13 @@ def create_pivot_by_barcode(df_group):
         how='outer'
     )
     
-    # Sort columns: Product/Barcode, Product, then Quantity columns, then Tax Incl. columns
-    base_cols = ['Product/Barcode', 'Product']
-    qty_cols = [col for col in pivot.columns if col.startswith('Quantity_')]
-    revenue_cols = [col for col in pivot.columns if col.startswith('Tax_Incl_')]
+    # Rename base columns
+    pivot = pivot.rename(columns={'Product/Barcode': 'Barcode', 'Product': 'Produk'})
+    
+    # Sort columns: Barcode, Produk, then Jumlah columns, then Total columns
+    base_cols = ['Barcode', 'Produk']
+    qty_cols = [col for col in pivot.columns if col.startswith('Jumlah_')]
+    revenue_cols = [col for col in pivot.columns if col.startswith('Total_')]
     
     # Sort date columns by date
     def extract_date(col_name):
@@ -256,8 +260,8 @@ def create_pivot_by_brand(df_group):
             else:
                 return f"{brand_name}_{prefix}_{str(col_val)}"
         
-        pivot_qty.columns = [format_col_name("Quantity", brand, col) for col in pivot_qty.columns]
-        pivot_revenue.columns = [format_col_name("Tax_Incl", brand, col) for col in pivot_revenue.columns]
+        pivot_qty.columns = [format_col_name("Jumlah", brand, col) for col in pivot_qty.columns]
+        pivot_revenue.columns = [format_col_name("Total", brand, col) for col in pivot_revenue.columns]
         
         # Merge Quantity and Tax_Incl for this brand
         brand_pivot = pd.merge(
@@ -272,34 +276,39 @@ def create_pivot_by_brand(df_group):
     # Merge all brand pivots
     if not brand_pivots:
         # If no brands, return empty pivot with base columns
-        return pd.DataFrame(columns=['Product/Barcode', 'Product'])
+        return pd.DataFrame(columns=['Barcode', 'Produk'])
     
     # Start with first brand
     final_pivot = brand_pivots[0][1]
     
+    # Rename base columns in first pivot
+    final_pivot = final_pivot.rename(columns={'Product/Barcode': 'Barcode', 'Product': 'Produk'})
+    
     # Merge remaining brands
     for brand, brand_pivot in brand_pivots[1:]:
+        # Rename base columns in brand pivot before merging
+        brand_pivot = brand_pivot.rename(columns={'Product/Barcode': 'Barcode', 'Product': 'Produk'})
         final_pivot = pd.merge(
             final_pivot,
             brand_pivot,
-            on=['Product/Barcode', 'Product'],
+            on=['Barcode', 'Produk'],
             how='outer',
             suffixes=('', f'_{brand}')
         )
     
     # Organize columns: base columns first, then brand columns grouped together
-    base_cols = ['Product/Barcode', 'Product']
+    base_cols = ['Barcode', 'Produk']
     brand_col_groups = {}
     
     for brand in brands:
-        brand_qty_cols = [col for col in final_pivot.columns if col.startswith(f"{brand}_Quantity_")]
-        brand_revenue_cols = [col for col in final_pivot.columns if col.startswith(f"{brand}_Tax_Incl_")]
+        brand_qty_cols = [col for col in final_pivot.columns if col.startswith(f"{brand}_Jumlah_")]
+        brand_revenue_cols = [col for col in final_pivot.columns if col.startswith(f"{brand}_Total_")]
         
         # Sort date columns by date
         def extract_date(col_name):
             try:
-                # Extract date from column name like "Brand_Quantity_2025-11-03"
-                date_str = col_name.split('_', 2)[2]  # Get date part after Brand_Quantity_
+                # Extract date from column name like "Brand_Jumlah_2025-11-03"
+                date_str = col_name.split('_', 2)[2]  # Get date part after Brand_Jumlah_
                 return pd.to_datetime(date_str)
             except:
                 return pd.Timestamp.min
@@ -307,7 +316,7 @@ def create_pivot_by_brand(df_group):
         brand_qty_cols_sorted = sorted(brand_qty_cols, key=extract_date)
         brand_revenue_cols_sorted = sorted(brand_revenue_cols, key=extract_date)
         
-        # For each date, put Quantity then Tax_Incl
+        # For each date, put Jumlah then Total
         brand_cols = []
         dates = set()
         for col in brand_qty_cols_sorted:
@@ -315,8 +324,8 @@ def create_pivot_by_brand(df_group):
             dates.add(date_str)
         
         for date_str in sorted(dates):
-            qty_col = f"{brand}_Quantity_{date_str}"
-            revenue_col = f"{brand}_Tax_Incl_{date_str}"
+            qty_col = f"{brand}_Jumlah_{date_str}"
+            revenue_col = f"{brand}_Total_{date_str}"
             if qty_col in final_pivot.columns:
                 brand_cols.append(qty_col)
             if revenue_col in final_pivot.columns:
@@ -417,21 +426,21 @@ def create_workbook_for_parent_brand(pivot_df, detailed_df, parent_brand_name, d
                             brand_barcodes = set(brand_products['Product/Barcode'].astype(str))
                             
                             # Filter pivot_df to only include products of this brand
-                            brand_pivot = date_pivot_df[date_pivot_df['Product/Barcode'].astype(str).isin(brand_barcodes)]
+                            brand_pivot = date_pivot_df[date_pivot_df['Barcode'].astype(str).isin(brand_barcodes)]
                             
-                            # Calculate total sellout (Tax_Incl) for this brand
-                            tax_incl_cols = [col for col in date_pivot_df.columns if col.startswith('Tax_Incl_')]
-                            brand_total_sellout = brand_pivot[tax_incl_cols].sum().sum() if not brand_pivot.empty and tax_incl_cols else 0
+                            # Calculate total sellout (Total) for this brand
+                            total_cols = [col for col in date_pivot_df.columns if col.startswith('Total_')]
+                            brand_total_sellout = brand_pivot[total_cols].sum().sum() if not brand_pivot.empty and total_cols else 0
                             
                             # Create brand total sellout row
                             brand_total_row_data = {}
                             for col in date_pivot_df.columns:
-                                if col in ['Product/Barcode', 'Product']:
-                                    brand_total_row_data[col] = f"{brand} Total Sellout" if col == 'Product/Barcode' else ""
-                                elif col.startswith('Tax_Incl_'):
-                                    # Show total sellout for this brand in all Tax_Incl columns
+                                if col in ['Barcode', 'Produk']:
+                                    brand_total_row_data[col] = f"{brand} Total Sellout" if col == 'Barcode' else ""
+                                elif col.startswith('Total_'):
+                                    # Show total sellout for this brand in all Total columns
                                     brand_total_row_data[col] = brand_total_sellout
-                                elif col.startswith('Quantity_'):
+                                elif col.startswith('Jumlah_'):
                                     # Leave quantity columns empty for brand totals
                                     brand_total_row_data[col] = ""
                                 else:
@@ -457,11 +466,11 @@ def create_workbook_for_parent_brand(pivot_df, detailed_df, parent_brand_name, d
                     # Add Total Sellout row for standard format
                     total_row_data = {}
                     for col in date_pivot_df.columns:
-                        if col in ['Product/Barcode', 'Product']:
-                            total_row_data[col] = "Total Sellout" if col == 'Product/Barcode' else ""
-                        elif col.startswith('Tax_Incl_'):
+                        if col in ['Barcode', 'Produk']:
+                            total_row_data[col] = "Total Sellout" if col == 'Barcode' else ""
+                        elif col.startswith('Total_'):
                             total_row_data[col] = date_pivot_df[col].sum()
-                        elif col.startswith('Quantity_'):
+                        elif col.startswith('Jumlah_'):
                             total_row_data[col] = date_pivot_df[col].sum()
                         else:
                             total_row_data[col] = ""
@@ -476,13 +485,36 @@ def create_workbook_for_parent_brand(pivot_df, detailed_df, parent_brand_name, d
                         value = total_row_df.iloc[0][col_name]
                         cell.value = value
                 
-                # Format barcode column as text
+                # Format header row and barcode column
                 header_row = list(ws_pivot.iter_rows(min_row=1, max_row=1))[0]
                 barcode_col_idx_pivot = None
+                
+                # Format header row: black bold text and yellow fill
+                yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+                bold_font = Font(bold=True, color="000000")
+                
                 for idx, cell in enumerate(header_row):
-                    if cell.value == 'Product/Barcode':
+                    cell.font = bold_font
+                    cell.fill = yellow_fill
+                    if cell.value == 'Barcode':
                         barcode_col_idx_pivot = idx
-                        break
+                
+                # Format Total columns with currency format
+                total_col_indices = []
+                for idx, cell in enumerate(header_row, 1):
+                    if cell.value and str(cell.value).startswith('Total_'):
+                        total_col_indices.append(idx)
+                
+                # Apply currency format to Total columns
+                currency_format = '"Rp "#,##0.00'
+                for row in ws_pivot.iter_rows(min_row=2):
+                    for col_idx in total_col_indices:
+                        cell = row[col_idx - 1]
+                        if cell.value is not None and cell.value != "":
+                            try:
+                                cell.number_format = currency_format
+                            except:
+                                pass
                 
                 if barcode_col_idx_pivot is not None:
                     # Determine start row based on organization
@@ -502,10 +534,15 @@ def create_workbook_for_parent_brand(pivot_df, detailed_df, parent_brand_name, d
                 for r in dataframe_to_rows(date_detailed_df, index=False, header=True):
                     ws_detailed.append(r)
                 
+                # Format header row in detailed report: black bold text and yellow fill
+                header_row_detailed = list(ws_detailed.iter_rows(min_row=1, max_row=1))[0]
+                for cell in header_row_detailed:
+                    cell.font = bold_font
+                    cell.fill = yellow_fill
+                
                 # Format Product/Barcode column as text in detailed report
-                header_row = list(ws_detailed.iter_rows(min_row=1, max_row=1))[0]
                 barcode_col_idx = None
-                for idx, cell in enumerate(header_row, 1):
+                for idx, cell in enumerate(header_row_detailed, 1):
                     if cell.value == 'Product/Barcode':
                         barcode_col_idx = idx
                         break
@@ -529,9 +566,9 @@ def create_workbook_for_parent_brand(pivot_df, detailed_df, parent_brand_name, d
         
         # Detect if pivot is brand-organized by checking column names
         if not is_brand_organized:
-            # Check if columns have brand prefixes (format: BrandName_Quantity_Date or BrandName_Tax_Incl_Date)
-            has_brand_prefixes = any('_' in col and col not in ['Product/Barcode', 'Product'] and 
-                                     not col.startswith('Quantity_') and not col.startswith('Tax_Incl_') 
+            # Check if columns have brand prefixes (format: BrandName_Jumlah_Date or BrandName_Total_Date)
+            has_brand_prefixes = any('_' in col and col not in ['Barcode', 'Produk'] and 
+                                     not col.startswith('Jumlah_') and not col.startswith('Total_') 
                                      for col in pivot_df.columns)
             is_brand_organized = has_brand_prefixes
         
@@ -557,21 +594,21 @@ def create_workbook_for_parent_brand(pivot_df, detailed_df, parent_brand_name, d
                     brand_barcodes = set(brand_products['Product/Barcode'].astype(str))
                     
                     # Filter pivot_df to only include products of this brand
-                    brand_pivot = pivot_df[pivot_df['Product/Barcode'].astype(str).isin(brand_barcodes)]
+                    brand_pivot = pivot_df[pivot_df['Barcode'].astype(str).isin(brand_barcodes)]
                     
-                    # Calculate total sellout (Tax_Incl) for this brand
-                    tax_incl_cols = [col for col in pivot_df.columns if col.startswith('Tax_Incl_')]
-                    brand_total_sellout = brand_pivot[tax_incl_cols].sum().sum() if not brand_pivot.empty and tax_incl_cols else 0
+                    # Calculate total sellout (Total) for this brand
+                    total_cols = [col for col in pivot_df.columns if col.startswith('Total_')]
+                    brand_total_sellout = brand_pivot[total_cols].sum().sum() if not brand_pivot.empty and total_cols else 0
                     
                     # Create brand total sellout row
                     brand_total_row_data = {}
                     for col in pivot_df.columns:
-                        if col in ['Product/Barcode', 'Product']:
-                            brand_total_row_data[col] = f"{brand} Total Sellout" if col == 'Product/Barcode' else ""
-                        elif col.startswith('Tax_Incl_'):
-                            # Show total sellout for this brand in all Tax_Incl columns
+                        if col in ['Barcode', 'Produk']:
+                            brand_total_row_data[col] = f"{brand} Total Sellout" if col == 'Barcode' else ""
+                        elif col.startswith('Total_'):
+                            # Show total sellout for this brand in all Total columns
                             brand_total_row_data[col] = brand_total_sellout
-                        elif col.startswith('Quantity_'):
+                        elif col.startswith('Jumlah_'):
                             # Leave quantity columns empty for brand totals
                             brand_total_row_data[col] = ""
                         else:
@@ -600,10 +637,10 @@ def create_workbook_for_parent_brand(pivot_df, detailed_df, parent_brand_name, d
             # First, identify all brands from column names
             brands = set()
             for col in pivot_df.columns:
-                if col not in ['Product/Barcode', 'Product'] and '_' in col:
-                    # Extract brand name (first part before _Quantity_ or _Tax_Incl_)
+                if col not in ['Barcode', 'Produk'] and '_' in col:
+                    # Extract brand name (first part before _Jumlah_ or _Total_)
                     parts = col.split('_')
-                    if len(parts) >= 2 and parts[1] in ['Quantity', 'Tax_Incl']:
+                    if len(parts) >= 2 and parts[1] in ['Jumlah', 'Total']:
                         brands.add(parts[0])
             
             brands = sorted(brands)
@@ -611,8 +648,8 @@ def create_workbook_for_parent_brand(pivot_df, detailed_df, parent_brand_name, d
             # Calculate totals for each brand
             brand_totals = {}
             for brand in brands:
-                brand_qty_cols = [col for col in pivot_df.columns if col.startswith(f"{brand}_Quantity_")]
-                brand_revenue_cols = [col for col in pivot_df.columns if col.startswith(f"{brand}_Tax_Incl_")]
+                brand_qty_cols = [col for col in pivot_df.columns if col.startswith(f"{brand}_Jumlah_")]
+                brand_revenue_cols = [col for col in pivot_df.columns if col.startswith(f"{brand}_Total_")]
                 
                 total_qty = pivot_df[brand_qty_cols].sum().sum() if brand_qty_cols else 0
                 total_revenue = pivot_df[brand_revenue_cols].sum().sum() if brand_revenue_cols else 0
@@ -646,27 +683,27 @@ def create_workbook_for_parent_brand(pivot_df, detailed_df, parent_brand_name, d
             for brand in brands:
                 # Create total row for this brand - ONE row showing totals
                 # Calculate totals for this brand: sum across all products and all dates
-                brand_qty_cols = [c for c in pivot_df.columns if c.startswith(f"{brand}_Quantity_")]
-                brand_rev_cols = [c for c in pivot_df.columns if c.startswith(f"{brand}_Tax_Incl_")]
+                brand_qty_cols = [c for c in pivot_df.columns if c.startswith(f"{brand}_Jumlah_")]
+                brand_rev_cols = [c for c in pivot_df.columns if c.startswith(f"{brand}_Total_")]
                 
                 total_qty_brand = pivot_df[brand_qty_cols].sum().sum() if brand_qty_cols else 0
                 total_rev_brand = pivot_df[brand_rev_cols].sum().sum() if brand_rev_cols else 0
                 
-                # Find the first Quantity and first Tax_Incl column for this brand to show totals
+                # Find the first Jumlah and first Total column for this brand to show totals
                 first_qty_col = brand_qty_cols[0] if brand_qty_cols else None
                 first_rev_col = brand_rev_cols[0] if brand_rev_cols else None
                 
                 total_row_data = {}
                 for col in pivot_df.columns:
-                    if col in ['Product/Barcode', 'Product']:
-                        total_row_data[col] = f"{brand} Total" if col == 'Product/Barcode' else ""
+                    if col in ['Barcode', 'Produk']:
+                        total_row_data[col] = f"{brand} Total" if col == 'Barcode' else ""
                     elif col.startswith(f"{brand}_"):
-                        # Only show totals in the first column of each type (Quantity and Tax_Incl)
+                        # Only show totals in the first column of each type (Jumlah and Total)
                         if col == first_qty_col:
                             # Show total quantity only in first quantity column
                             total_row_data[col] = total_qty_brand
                         elif col == first_rev_col:
-                            # Show total sold only in first tax incl column
+                            # Show total sold only in first total column
                             total_row_data[col] = total_rev_brand
                         else:
                             # Leave other columns empty
@@ -686,13 +723,13 @@ def create_workbook_for_parent_brand(pivot_df, detailed_df, parent_brand_name, d
             # Now add the overall Total Sellout row
             total_sellout_row_data = {}
             for col in pivot_df.columns:
-                if col in ['Product/Barcode', 'Product']:
-                    total_sellout_row_data[col] = "Total Sellout" if col == 'Product/Barcode' else ""
-                elif col.startswith('Tax_Incl_') or '_Tax_Incl_' in col:
-                    # Sum all Tax_Incl columns
+                if col in ['Barcode', 'Produk']:
+                    total_sellout_row_data[col] = "Total Sellout" if col == 'Barcode' else ""
+                elif col.startswith('Total_') or '_Total_' in col:
+                    # Sum all Total columns
                     total_sellout_row_data[col] = pivot_df[col].sum() if col in pivot_df.columns else 0
-                elif col.startswith('Quantity_') or '_Quantity_' in col:
-                    # Sum all Quantity columns
+                elif col.startswith('Jumlah_') or '_Jumlah_' in col:
+                    # Sum all Jumlah columns
                     total_sellout_row_data[col] = pivot_df[col].sum() if col in pivot_df.columns else 0
                 else:
                     total_sellout_row_data[col] = ""
@@ -725,21 +762,21 @@ def create_workbook_for_parent_brand(pivot_df, detailed_df, parent_brand_name, d
                     brand_barcodes = set(brand_products['Product/Barcode'].astype(str))
                     
                     # Filter pivot_df to only include products of this brand
-                    brand_pivot = pivot_df[pivot_df['Product/Barcode'].astype(str).isin(brand_barcodes)]
+                    brand_pivot = pivot_df[pivot_df['Barcode'].astype(str).isin(brand_barcodes)]
                     
-                    # Calculate total sellout (Tax_Incl) for this brand
-                    tax_incl_cols = [col for col in pivot_df.columns if col.startswith('Tax_Incl_')]
-                    brand_total_sellout = brand_pivot[tax_incl_cols].sum().sum() if not brand_pivot.empty and tax_incl_cols else 0
+                    # Calculate total sellout (Total) for this brand
+                    total_cols = [col for col in pivot_df.columns if col.startswith('Total_')]
+                    brand_total_sellout = brand_pivot[total_cols].sum().sum() if not brand_pivot.empty and total_cols else 0
                     
                     # Create brand total sellout row
                     brand_total_row_data = {}
                     for col in pivot_df.columns:
-                        if col in ['Product/Barcode', 'Product']:
-                            brand_total_row_data[col] = f"{brand} Total Sellout" if col == 'Product/Barcode' else ""
-                        elif col.startswith('Tax_Incl_'):
-                            # Show total sellout for this brand in all Tax_Incl columns
+                        if col in ['Barcode', 'Produk']:
+                            brand_total_row_data[col] = f"{brand} Total Sellout" if col == 'Barcode' else ""
+                        elif col.startswith('Total_'):
+                            # Show total sellout for this brand in all Total columns
                             brand_total_row_data[col] = brand_total_sellout
-                        elif col.startswith('Quantity_'):
+                        elif col.startswith('Jumlah_'):
                             # Leave quantity columns empty for brand totals
                             brand_total_row_data[col] = ""
                         else:
@@ -758,17 +795,17 @@ def create_workbook_for_parent_brand(pivot_df, detailed_df, parent_brand_name, d
         total_row_data = {}
         
         # Base columns
-        for col in ['Product/Barcode', 'Product']:
+        for col in ['Barcode', 'Produk']:
             if col in pivot_df.columns:
-                total_row_data[col] = "Total Sellout" if col == 'Product/Barcode' else ""
+                total_row_data[col] = "Total Sellout" if col == 'Barcode' else ""
         
-        # Sum all Tax_Incl columns
-        tax_incl_cols = [col for col in pivot_df.columns if col.startswith('Tax_Incl_')]
-        for col in tax_incl_cols:
+        # Sum all Total columns
+        total_cols = [col for col in pivot_df.columns if col.startswith('Total_')]
+        for col in total_cols:
             total_row_data[col] = pivot_df[col].sum()
         
-        # Sum all Quantity columns
-        qty_cols = [col for col in pivot_df.columns if col.startswith('Quantity_')]
+        # Sum all Jumlah columns
+        qty_cols = [col for col in pivot_df.columns if col.startswith('Jumlah_')]
         for col in qty_cols:
             total_row_data[col] = pivot_df[col].sum()
         
@@ -785,12 +822,37 @@ def create_workbook_for_parent_brand(pivot_df, detailed_df, parent_brand_name, d
             value = total_row_df.iloc[0][col_name]
             cell.value = value
     
-    # Ensure Product/Barcode column in pivot is formatted as text
-    # Find Product/Barcode column index in pivot table
+    # Format header row: black bold text and yellow fill
     header_row = list(ws_pivot.iter_rows(min_row=1, max_row=1))[0]
+    yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+    bold_font = Font(bold=True, color="000000")
+    
+    for cell in header_row:
+        cell.font = bold_font
+        cell.fill = yellow_fill
+    
+    # Format Total columns with currency format
+    total_col_indices = []
+    for idx, cell in enumerate(header_row, 1):
+        if cell.value and (str(cell.value).startswith('Total_') or '_Total_' in str(cell.value)):
+            total_col_indices.append(idx)
+    
+    # Apply currency format to Total columns
+    currency_format = '"Rp "#,##0.00'
+    for row in ws_pivot.iter_rows(min_row=2):
+        for col_idx in total_col_indices:
+            cell = row[col_idx - 1]
+            if cell.value is not None and cell.value != "":
+                try:
+                    cell.number_format = currency_format
+                except:
+                    pass
+    
+    # Ensure Barcode column in pivot is formatted as text
+    # Find Barcode column index in pivot table
     barcode_col_idx_pivot = None
     for idx, cell in enumerate(header_row):
-        if cell.value == 'Product/Barcode':
+        if cell.value == 'Barcode':
             barcode_col_idx_pivot = idx
             break
     
@@ -825,11 +887,16 @@ def create_workbook_for_parent_brand(pivot_df, detailed_df, parent_brand_name, d
     for r in dataframe_to_rows(detailed_df, index=False, header=True):
         ws_detailed.append(r)
     
+    # Format header row in detailed report: black bold text and yellow fill
+    header_row_detailed = list(ws_detailed.iter_rows(min_row=1, max_row=1))[0]
+    for cell in header_row_detailed:
+        cell.font = bold_font
+        cell.fill = yellow_fill
+    
     # Format Product/Barcode column as text in detailed report
     # Find Product/Barcode column index
-    header_row = list(ws_detailed.iter_rows(min_row=1, max_row=1))[0]
     barcode_col_idx = None
-    for idx, cell in enumerate(header_row, 1):
+    for idx, cell in enumerate(header_row_detailed, 1):
         if cell.value == 'Product/Barcode':
             barcode_col_idx = idx
             break
