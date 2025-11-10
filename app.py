@@ -271,7 +271,7 @@ def create_grouped_detailed_report(df_group, organize_by_brand=False):
 def apply_excel_formatting(worksheet, data_type="pivot"):
     """Apply consistent formatting to Excel worksheet"""
     # Apply yellow fill to headers
-    yellow_fill = PatternFill(start_color="FFFF00", fill_type="solid")
+    yellow_fill = PatternFill(fill_type="solid", fgColor="FFFF00")
     bold_font = Font(bold=True)
     
     header_row = list(worksheet.iter_rows(min_row=1, max_row=1))[0]
@@ -361,7 +361,7 @@ def apply_excel_formatting(worksheet, data_type="pivot"):
             ):
                 bold_font = Font(bold=True)
                 # Apply light gray background to brand header
-                header_fill = PatternFill(start_color="F2F2F2", fill_type="solid")
+                header_fill = PatternFill(fill_type="solid", fgColor="F2F2F2")
                 for cell in row:
                     if cell.value or str(brand_cell.value).endswith(' - Total'):  # Format all cells in total row
                         cell.font = bold_font
@@ -382,10 +382,10 @@ def apply_excel_formatting(worksheet, data_type="pivot"):
     
     # Apply borders to all cells
     thin_border = Border(
-        left=Side(style='thin', color='000000'),
-        right=Side(style='thin', color='000000'),
-        top=Side(style='thin', color='000000'),
-        bottom=Side(style='thin', color='000000')
+        left=Side(border_style='thin', color='000000'),
+        right=Side(border_style='thin', color='000000'),
+        top=Side(border_style='thin', color='000000'),
+        bottom=Side(border_style='thin', color='000000')
     )
     
     max_row = worksheet.max_row
