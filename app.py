@@ -43,7 +43,7 @@ def login():
 def dashboard_page():
     """Dashboard page content"""
     st.title("📊 Dashboard")
-    st.markdown("### NK Dashboard v0.1.3")
+    st.markdown("### NK Dashboard v0.1.5")
     
     st.info("This page will display an overview of key business metrics and KPIs.")
     
