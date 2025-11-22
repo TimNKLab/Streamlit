@@ -897,40 +897,331 @@ def ba_sales_report_page():
         """)
 
 def stock_control_page():
-    """Stock Control page content"""
-    st.title("📦 Stock Control")
-    st.markdown("### Inventory Management System")
+    """Stock Control page with Excel file combining functionality"""
+    st.title("NK Stock Control")
+    st.markdown("### Pembuat Laporan Stock Control")
     
-    st.info("This page will provide tools for monitoring and managing inventory levels.")
+    # Initialize session state variables
+    if 'selected_files' not in st.session_state:
+        st.session_state.selected_files = []
+    if 'reference_file' not in st.session_state:
+        st.session_state.reference_file = None
+    if 'combined_data' not in st.session_state:
+        st.session_state.combined_data = None
     
-    st.subheader("📊 Current Stock Levels")
-    st.text("Real-time inventory status will be displayed here.")
-    
-    col1, col2, col3, col4 = st.columns(4)
+    # Compact file upload section
+    col1, col2, col3 = st.columns([3, 1, 1])
     
     with col1:
-        st.markdown("#### DSI Report")
-        st.text("DSI level will be flagged here.")
+        uploaded_files = st.file_uploader(
+            "Masukkan file stock dari inventory adjustment di sini",
+            type=['xlsx', 'xls'],
+            accept_multiple_files=True,
+            key="excel_files"
+        )
     
     with col2:
-        st.markdown("#### Area Overstock Report")
-        st.text("Untuk SKU dengan jumlah terlalu banyak terpajang di area.")
+        if st.button("🔄 Clear", use_container_width=True):
+            st.session_state.selected_files = []
+            st.session_state.combined_data = None
+            st.rerun()
     
     with col3:
-        st.markdown("#### Area Understock Report")
-        st.text("Untuk SKU dengan jumlah terlalu sedikit terpajang di area.")
-
-    with col4:
-        st.markdown("#### ABC Analysis")
-        st.text("Prioritas barang berdasarkan ABC Analysis.")
+        if st.session_state.selected_files:
+            st.metric("Files", len(st.session_state.selected_files))
     
-    st.markdown("---")
-    st.subheader("🔍 Stock Search & Filter")
-    st.text("Advanced search and filtering capabilities will be available here.")
+    # Reference file section
+    col1, col2, col3 = st.columns([3, 1, 1])
     
-    st.markdown("---")
-    st.subheader("➕ Stock Operations")
-    st.text("Stock adjustments, transfers, and other operations will be performed here.")
+    with col1:
+        reference_file = st.file_uploader(
+            "Masukkan file penjualan 2 minggu terakhir di sini",
+            type=['xlsx', 'xls'],
+            key="reference_file_upload"
+        )
+    
+    with col2:
+        if reference_file:
+            st.session_state.reference_file = reference_file
+        elif st.button("🗑️ Clear Ref", use_container_width=True):
+            st.session_state.reference_file = None
+            st.rerun()
+    
+    with col3:
+        if st.session_state.reference_file:
+            st.metric("Ref", "✅")
+    
+    # Compact options
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        sheet_name = st.text_input("Sheet name (optional)", placeholder="First sheet")
+        include_source = st.checkbox("Add source filename", value=True)
+    
+    with col2:
+        sort_option = st.radio(
+            "Sortir :",
+            options=["Urgency", "Brand/Name"],
+            index=0,  # Default to Urgency
+            horizontal=True
+        )
+    
+    # Process button
+    if not uploaded_files and not st.session_state.selected_files:
+        st.warning("⚠️ Belum upload file!")
+        return
+    
+    if st.button("Proses Data", type="primary", use_container_width=True):
+        if uploaded_files:
+            st.session_state.selected_files = uploaded_files
+        
+        if not st.session_state.selected_files:
+            st.error("❌ No files to process")
+            return
+        
+        # Process files
+        with st.spinner("Processing..."):
+            try:
+                combined_data = []
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                total_files = len(st.session_state.selected_files)
+                
+                for i, file in enumerate(st.session_state.selected_files):
+                    try:
+                        progress = (i + 1) / total_files
+                        progress_bar.progress(progress)
+                        status_text.text(f"Processing {file.name} ({i + 1}/{total_files})")
+                        
+                        sheet_to_read = sheet_name.strip() if sheet_name.strip() else None
+                        if sheet_to_read:
+                            df = pd.read_excel(file, sheet_name=sheet_to_read, dtype={'Barcode': str})
+                        else:
+                            df = pd.read_excel(file, dtype={'Barcode': str})
+                        
+                        if include_source:
+                            df['Source_File'] = file.name.replace('.xlsx', '').replace('.xls', '')
+                        
+                        combined_data.append(df)
+                        
+                    except Exception as e:
+                        st.error(f"❌ {file.name}: {str(e)}")
+                        continue
+                
+                if not combined_data:
+                    st.error("❌ No data read from files")
+                    return
+                
+                status_text.text("🔗 Merging...")
+                final_df = pd.concat(combined_data, ignore_index=True, sort=False)
+                
+                status_text.text("🔄 Transforming...")
+                
+                # Rename columns
+                rename_map = {}
+                if 'Quantity' in final_df.columns:
+                    rename_map['Quantity'] = 'Gudang'
+                if 'Product/Quantity On Hand' in final_df.columns:
+                    rename_map['Product/Quantity On Hand'] = 'Sistem'
+                
+                if rename_map:
+                    final_df = final_df.rename(columns=rename_map)
+                
+                # Add Area column
+                if 'Gudang' in final_df.columns and 'Sistem' in final_df.columns:
+                    gudang_idx = final_df.columns.get_loc('Gudang')
+                    area_values = final_df['Sistem'] - final_df['Gudang']
+                    final_df.insert(gudang_idx + 1, 'Area', area_values)
+                
+                # Clean up Barcode column
+                if 'Barcode' in final_df.columns:
+                    final_df['Barcode'] = final_df['Barcode'].astype(str).replace('nan', '')
+                
+                # Clean up Product/Product Category
+                if 'Product/Product Category' in final_df.columns:
+                    final_df['Product/Product Category'] = final_df['Product/Product Category'].apply(
+                        lambda x: x.split('/')[-1].strip() if pd.notna(x) and '/' in str(x) else x
+                    )
+                
+                # Sort data if requested
+                if sort_option:
+                    status_text.text("🔤 Sorting...")
+                    
+                    if sort_option == "Brand/Name":
+                        sort_columns = []
+                        
+                        if 'Product/Brand' in final_df.columns:
+                            sort_columns.append('Product/Brand')
+                        if 'Product/Name' in final_df.columns:
+                            sort_columns.append('Product/Name')
+                        
+                        if sort_columns:
+                            final_df = final_df.sort_values(by=sort_columns, ascending=True)
+                            final_df = final_df.reset_index(drop=True)
+                    
+                    elif sort_option == "Urgency":
+                        # Sort by urgency (URGENT first, then Recheck, then others)
+                        if 'Status' in final_df.columns:
+                            # Create urgency order: URGENT = 0, Recheck = 1, others = 2
+                            urgency_order = {'URGENT': 0, 'Recheck': 1}
+                            final_df['urgency_sort'] = final_df['Status'].map(urgency_order).fillna(2)
+                            
+                            # Sort by urgency first, then by Area if available
+                            sort_columns = ['urgency_sort']
+                            if 'Area' in final_df.columns:
+                                sort_columns.append('Area')
+                            
+                            final_df = final_df.sort_values(by=sort_columns, ascending=[True, True])
+                            final_df = final_df.reset_index(drop=True)
+                            
+                            # Remove the temporary sort column
+                            final_df = final_df.drop('urgency_sort', axis=1)
+                
+                # Process reference file lookup if provided
+                if st.session_state.reference_file and 'Barcode' in final_df.columns:
+                    status_text.text("🔍 Reference lookup...")
+                    try:
+                        ref_df = pd.read_excel(st.session_state.reference_file, dtype={'Barcode': str})
+                        
+                        if 'Barcode' in ref_df.columns and 'Quantity' in ref_df.columns:
+                            final_df['Barcode'] = final_df['Barcode'].astype(str).str.strip()
+                            ref_df['Barcode'] = ref_df['Barcode'].astype(str).str.strip()
+                            
+                            ref_lookup = dict(zip(ref_df['Barcode'], ref_df['Quantity']))
+                            
+                            # Remove rows where Area > 6
+                            if 'Area' in final_df.columns:
+                                original_count = len(final_df)
+                                final_df = final_df[final_df['Area'] <= 6]
+                                removed_count = original_count - len(final_df)
+                                if removed_count > 0:
+                                    st.info(f"ℹ️ Removed {removed_count} rows (Area > 6)")
+                            
+                            # Create Status column
+                            def determine_status(row):
+                                barcode = row['Barcode']
+                                if barcode in ref_lookup:
+                                    return ""
+                                else:
+                                    if 'Area' in final_df.columns:
+                                        return "URGENT" if row['Area'] == 0 else "Recheck"
+                                    else:
+                                        return "Recheck"
+                            
+                            final_df['Status'] = final_df.apply(determine_status, axis=1)
+                            
+                            # Move Status column to before Source_File
+                            if 'Source_File' in final_df.columns:
+                                cols = list(final_df.columns)
+                                cols.remove('Status')
+                                source_idx = cols.index('Source_File')
+                                cols.insert(source_idx, 'Status')
+                                final_df = final_df[cols]
+                        else:
+                            st.warning("⚠️ Ref file needs 'Barcode' and 'Quantity' columns")
+                    except Exception as e:
+                        st.error(f"❌ Ref file error: {str(e)}")
+                
+                st.session_state.combined_data = final_df
+                
+                progress_bar.progress(1.0)
+                status_text.text("✅ Done!")
+                
+                st.success(f"🎉 Combined {len(combined_data)} files!")
+                
+                # Compact metrics
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Rows", f"{len(final_df):,}")
+                with col2:
+                    st.metric("Cols", len(final_df.columns))
+                with col3:
+                    if 'Area' in final_df.columns:
+                        st.metric("Max Area", final_df['Area'].max())
+                with col4:
+                    if 'Status' in final_df.columns:
+                        urgent_count = (final_df['Status'] == 'URGENT').sum()
+                        st.metric("URGENT", urgent_count)
+                
+            except Exception as e:
+                st.error(f"❌ Error: {str(e)}")
+    
+    # Display combined data if available
+    if st.session_state.combined_data is not None:
+        df = st.session_state.combined_data
+        
+        # Compact download section
+        st.markdown("---")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                df.to_excel(writer, index=False, sheet_name='Combined Data')
+            output.seek(0)
+            
+            st.download_button(
+                label="📥 Download Excel",
+                data=output,
+                file_name=f"combined_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                type="primary"
+            )
+        
+        with col2:
+            csv = df.to_csv(index=False).encode('utf-8')
+            
+            st.download_button(
+                label="📄 Download CSV",
+                data=csv,
+                file_name=f"combined_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+        
+        # Compact analysis if Status column exists
+        if 'Status' in df.columns:
+            st.markdown("---")
+            st.subheader("📈 Status Analysis")
+            
+            col1, col2 = st.columns([1, 2])
+            
+            with col1:
+                status_counts = df['Status'].value_counts()
+                total_count = len(df)
+                
+                st.write("**Summary:**")
+                for status, count in status_counts.items():
+                    percentage = (count / total_count) * 100
+                    if status:
+                        st.metric(status, f"{count} ({percentage:.1f}%)")
+                    else:
+                        st.metric("Found", f"{count} ({percentage:.1f}%)")
+            
+            with col2:
+                import plotly.express as px
+                
+                status_labels = []
+                status_values = []
+                
+                for status, count in status_counts.items():
+                    if status:
+                        status_labels.append(status)
+                    else:
+                        status_labels.append("Found")
+                    status_values.append(count)
+                
+                fig = px.pie(
+                    values=status_values,
+                    names=status_labels,
+                    title="Status Distribution"
+                )
+                fig.update_traces(textposition='inside', textinfo='percent+label')
+                fig.update_layout(height=350, showlegend=False)
+                
+                st.plotly_chart(fig, use_container_width=True)
 
 def dsi_report_page():
     """DSI Report page content"""
