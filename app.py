@@ -910,7 +910,7 @@ def stock_control_page():
         st.session_state.combined_data = None
     
     # Compact file upload section
-    col1, col2, col3 = st.columns([3, 1, 1])
+    col1, col2 = st.columns([4, 1])
     
     with col1:
         uploaded_files = st.file_uploader(
@@ -921,17 +921,11 @@ def stock_control_page():
         )
     
     with col2:
-        if st.button("🔄 Clear", use_container_width=True):
-            st.session_state.selected_files = []
-            st.session_state.combined_data = None
-            st.rerun()
-    
-    with col3:
         if st.session_state.selected_files:
             st.metric("Files", len(st.session_state.selected_files))
     
     # Reference file section
-    col1, col2, col3 = st.columns([3, 1, 1])
+    col1, col2 = st.columns([4, 1])
     
     with col1:
         reference_file = st.file_uploader(
@@ -943,11 +937,6 @@ def stock_control_page():
     with col2:
         if reference_file:
             st.session_state.reference_file = reference_file
-        elif st.button("🗑️ Clear Ref", use_container_width=True):
-            st.session_state.reference_file = None
-            st.rerun()
-    
-    with col3:
         if st.session_state.reference_file:
             st.metric("Ref", "✅")
     
@@ -955,7 +944,6 @@ def stock_control_page():
     col1, col2 = st.columns(2)
     
     with col1:
-        sheet_name = st.text_input("Sheet name (optional)", placeholder="First sheet")
         include_source = st.checkbox("Add source filename", value=True)
     
     with col2:
@@ -994,11 +982,8 @@ def stock_control_page():
                         progress_bar.progress(progress)
                         status_text.text(f"Processing {file.name} ({i + 1}/{total_files})")
                         
-                        sheet_to_read = sheet_name.strip() if sheet_name.strip() else None
-                        if sheet_to_read:
-                            df = pd.read_excel(file, sheet_name=sheet_to_read, dtype={'Barcode': str})
-                        else:
-                            df = pd.read_excel(file, dtype={'Barcode': str})
+                        sheet_to_read = None  # Always use first sheet
+                        df = pd.read_excel(file, dtype={'Barcode': str})
                         
                         if include_source:
                             df['Source_File'] = file.name.replace('.xlsx', '').replace('.xls', '')
@@ -1027,6 +1012,14 @@ def stock_control_page():
                 
                 if rename_map:
                     final_df = final_df.rename(columns=rename_map)
+                
+                # Remove items with 0 quantity in Gudang column
+                if 'Gudang' in final_df.columns:
+                    original_count = len(final_df)
+                    final_df = final_df[final_df['Gudang'] != 0]
+                    removed_count = original_count - len(final_df)
+                    if removed_count > 0:
+                        status_text.text(f"🗑️ Removed {removed_count} items with 0 Gudang quantity")
                 
                 # Add Area column
                 if 'Gudang' in final_df.columns and 'Sistem' in final_df.columns:
@@ -1059,24 +1052,6 @@ def stock_control_page():
                         if sort_columns:
                             final_df = final_df.sort_values(by=sort_columns, ascending=True)
                             final_df = final_df.reset_index(drop=True)
-                    
-                    elif sort_option == "Urgency":
-                        # Sort by urgency (URGENT first, then Recheck, then others)
-                        if 'Status' in final_df.columns:
-                            # Create urgency order: URGENT = 0, Recheck = 1, others = 2
-                            urgency_order = {'URGENT': 0, 'Recheck': 1}
-                            final_df['urgency_sort'] = final_df['Status'].map(urgency_order).fillna(2)
-                            
-                            # Sort by urgency first, then by Area if available
-                            sort_columns = ['urgency_sort']
-                            if 'Area' in final_df.columns:
-                                sort_columns.append('Area')
-                            
-                            final_df = final_df.sort_values(by=sort_columns, ascending=[True, True])
-                            final_df = final_df.reset_index(drop=True)
-                            
-                            # Remove the temporary sort column
-                            final_df = final_df.drop('urgency_sort', axis=1)
                 
                 # Process reference file lookup if provided
                 if st.session_state.reference_file and 'Barcode' in final_df.columns:
@@ -1122,6 +1097,21 @@ def stock_control_page():
                             st.warning("⚠️ Ref file needs 'Barcode' and 'Quantity' columns")
                     except Exception as e:
                         st.error(f"❌ Ref file error: {str(e)}")
+                
+                # Apply urgency sorting after status column is created
+                if sort_option == "Urgency":
+                    status_text.text("🔤 Sorting by urgency...")
+                    if 'Status' in final_df.columns:
+                        # Create urgency order for descending sort: URGENT = 2, Recheck = 1, others = 0
+                        urgency_order = {'URGENT': 2, 'Recheck': 1}
+                        final_df['urgency_sort'] = final_df['Status'].map(urgency_order).fillna(0)
+                        
+                        # Sort by urgency descending
+                        final_df = final_df.sort_values(by='urgency_sort', ascending=False)
+                        final_df = final_df.reset_index(drop=True)
+                        
+                        # Remove the temporary sort column
+                        final_df = final_df.drop('urgency_sort', axis=1)
                 
                 st.session_state.combined_data = final_df
                 
