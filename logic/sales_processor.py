@@ -122,7 +122,8 @@ class SalesProcessor:
                         separate_by_date=True
                     )
                 else:
-                    pivot_df = create_pivot_by_barcode(df_group)
+                    aggregate_dates = earliest_date.date() != latest_date.date()
+                    pivot_df = create_pivot_by_barcode(df_group, aggregate_dates=aggregate_dates)
                     detailed_df = create_grouped_detailed_report(df_group, organize_by_brand=is_non_paragon_hebe)
                     
                     workbook_bytes = create_workbook_for_parent_brand(

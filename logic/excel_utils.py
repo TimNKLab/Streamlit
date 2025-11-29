@@ -16,50 +16,65 @@ def sanitize_filename(name):
     sanitized = sanitized.strip(' .')
     return sanitized if sanitized else 'Unknown'
 
-def create_pivot_by_barcode(df_group):
-    """Create pivot table with barcode as index, dates as columns, showing Quantity and Tax Incl."""
+def create_pivot_by_barcode(df_group, aggregate_dates=False):
+    """Create pivot table grouped by barcode with optional date aggregation."""
     df = df_group.copy()
     
     df['Product/Barcode'] = df['Product/Barcode'].astype(str)
     
-    if not pd.api.types.is_datetime64_any_dtype(df['Order Date']):
-        df['Order Date'] = pd.to_datetime(df['Order Date'])
-    
-    df['Order Date Day'] = pd.to_datetime(df['Order Date']).dt.normalize()
-    
-    pivot_qty = pd.pivot_table(
-        df,
-        index=['Product/Barcode', 'Product'],
-        columns='Order Date Day',
-        values='Quantity',
-        aggfunc='sum',
-        fill_value=0
-    )
-    
-    pivot_revenue = pd.pivot_table(
-        df,
-        index=['Product/Barcode', 'Product'],
-        columns='Order Date Day',
-        values='Tax Incl.',
-        aggfunc='sum',
-        fill_value=0
-    )
-    
-    def format_col_name(prefix, col_val):
-        if pd.notna(col_val) and isinstance(col_val, pd.Timestamp):
-            return f"{prefix}_{col_val.strftime('%Y-%m-%d')}"
-        else:
-            return f"{prefix}_{str(col_val)}"
-    
-    pivot_qty.columns = [format_col_name("Jumlah", col) for col in pivot_qty.columns]
-    pivot_revenue.columns = [format_col_name("Total", col) for col in pivot_revenue.columns]
-    
-    pivot = pd.merge(
-        pivot_qty.reset_index(),
-        pivot_revenue.reset_index(),
-        on=['Product/Barcode', 'Product'],
-        how='outer'
-    )
+    if aggregate_dates:
+        qty_totals = (
+            df.groupby(['Product/Barcode', 'Product'])['Quantity']
+            .sum()
+            .reset_index()
+            .rename(columns={'Quantity': 'Jumlah_Total'})
+        )
+        revenue_totals = (
+            df.groupby(['Product/Barcode', 'Product'])['Tax Incl.']
+            .sum()
+            .reset_index()
+            .rename(columns={'Tax Incl.': 'Total_Total'})
+        )
+        pivot = pd.merge(qty_totals, revenue_totals, on=['Product/Barcode', 'Product'], how='outer')
+    else:
+        if not pd.api.types.is_datetime64_any_dtype(df['Order Date']):
+            df['Order Date'] = pd.to_datetime(df['Order Date'])
+        
+        df['Order Date Day'] = pd.to_datetime(df['Order Date']).dt.normalize()
+        
+        pivot_qty = pd.pivot_table(
+            df,
+            index=['Product/Barcode', 'Product'],
+            columns='Order Date Day',
+            values='Quantity',
+            aggfunc='sum',
+            fill_value=0
+        )
+        
+        pivot_revenue = pd.pivot_table(
+            df,
+            index=['Product/Barcode', 'Product'],
+            columns='Order Date Day',
+            values='Tax Incl.',
+            aggfunc='sum',
+            fill_value=0
+        )
+        
+        def format_col_name(prefix, col_val):
+            if pd.notna(col_val) and isinstance(col_val, pd.Timestamp):
+                return f"{prefix}_{col_val.strftime('%Y-%m-%d')}"
+            else:
+                return f"{prefix}_{str(col_val)}"
+        
+        pivot_qty.columns = [format_col_name("Jumlah", col) for col in pivot_qty.columns]
+        pivot_revenue.columns = [format_col_name("Total", col) for col in pivot_revenue.columns]
+        
+        pivot = pd.merge(
+            pivot_qty.reset_index(),
+            pivot_revenue.reset_index(),
+            on=['Product/Barcode', 'Product'],
+            how='outer'
+        )
     
     pivot = pivot.rename(columns={'Product/Barcode': 'Barcode', 'Product': 'Produk'})
     

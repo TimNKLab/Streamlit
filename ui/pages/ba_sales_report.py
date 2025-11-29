@@ -61,7 +61,7 @@ class BASalesReportPage:
     
     def process_file(self, uploaded_file):
         """Process the uploaded file"""
-        with st.spinner("Processing file... This may take a moment."):
+        with st.spinner("Tunggu bentar yak, sedang proses."):
             separate_by_date = (st.session_state.date_organization_option == "Pisahkan per tanggal")
             workbooks_dict, zip_file, summary, error = self.processor.process_sales_workbook(uploaded_file, separate_by_date=separate_by_date)
             
