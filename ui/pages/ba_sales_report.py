@@ -75,7 +75,7 @@ class BASalesReportPage:
                 st.session_state.processed_zip = zip_file
                 st.session_state.processing_summary = summary
                 st.session_state.processing_error = None
-                st.success("✅ File processed successfully!")
+                st.success("✅ File berhasil diproses!")
                 st.rerun()
     
     def render_error_section(self):

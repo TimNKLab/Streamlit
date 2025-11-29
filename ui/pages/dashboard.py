@@ -44,8 +44,9 @@ def _cached_recent_pos_orders(
 def render_dashboard_page():
     """Render dashboard page content backed by live Odoo data."""
 
-    st.title("📊 Dashboard")
-    st.markdown("### NK Dashboard v0.2.0")
+    st.title("Dashboard")
+    st.markdown("### NK Dashboard v0.3.1")
+    st.caption("Sekarang sudah tersambung dengan Odoo Database! 😸")
 
     now = datetime.now().replace(microsecond=0)
     default_start_dt = (now - timedelta(days=1))
@@ -60,7 +61,7 @@ def render_dashboard_page():
 
     filter_state = st.session_state.pos_filter_state
 
-    with st.expander("⚙️ POS Order Filter", expanded=False):
+    with st.expander("POS Order Filter", expanded=False):
         with st.form("pos_filter_form"):
             col_dates = st.columns(2)
             with col_dates[0]:
@@ -101,7 +102,7 @@ def render_dashboard_page():
 
     col_health, col_refresh = st.columns([4, 1])
     with col_health:
-        health_status = "🟢 Connected" if check_odoo_health() else "🔴 Disconnected"
+        health_status = "Terhubung" if check_odoo_health() else "Belum Terhubung"
         st.info(f"Odoo status: {health_status}")
     with col_refresh:
         if st.button("🔄 Refresh Data"):
@@ -115,7 +116,7 @@ def render_dashboard_page():
     try:
         metrics = _cached_sales_metrics(pos_start_dt=pos_start_dt, pos_end_dt=pos_end_dt)
     except OdooIntegrationError as exc:
-        st.error(f"Tidak dapat mengambil metrik Odoo: {exc}")
+        st.error(f"Gagal sinkron ke database: {exc}")
         metrics = None
 
     col1, col2, col3, col4 = st.columns(4)
@@ -158,11 +159,11 @@ def render_dashboard_page():
     if recent_orders:
         formatted_rows = [
             {
-                "Order": row.get("name"),
-                "Customer": (row.get("partner_id") or [None, "Tidak diketahui"])[1],
-                "Amount": row.get("amount_total", 0.0),
-                "State": row.get("state"),
-                "Date": row.get("date_order"),
+                "Nomor Order": row.get("name"),
+                "Nama Pelanggan": (row.get("partner_id") or [None, "Tidak diketahui"])[1],
+                "Nilai": row.get("amount_total", 0.0),
+                "Status Transaksi": row.get("state"),
+                "Tanggal": row.get("date_order"),
             }
             for row in recent_orders
         ]
@@ -172,6 +173,6 @@ def render_dashboard_page():
             hide_index=True,
         )
     else:
-        st.info("Belum ada data pesanan terbaru yang bisa ditampilkan.")
+        st.info("Belum ada data yang bisa ditampilkan.")
 
     st.caption("Data ditarik langsung dari Odoo melalui API odoorpc.")
