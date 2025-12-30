@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime, time, timedelta
 
 import streamlit as st
+import pandas as pd
+from st_aggrid import AgGrid, GridOptionsBuilder
 
 from odoo.services import (
     OdooIntegrationError,
@@ -45,8 +47,8 @@ def render_dashboard_page():
     """Render dashboard page content backed by live Odoo data."""
 
     st.title("Dashboard")
-    st.markdown("### NK Dashboard v0.3.1")
-    st.caption("Sekarang sudah tersambung dengan Odoo Database! 😸")
+    st.markdown("### NK Dashboard v0.4.1")
+    st.caption("Sekarang sudah bisa buat kartu stok! 😸")
 
     now = datetime.now().replace(microsecond=0)
     default_start_dt = (now - timedelta(days=1))
@@ -167,10 +169,34 @@ def render_dashboard_page():
             }
             for row in recent_orders
         ]
-        st.dataframe(
-            formatted_rows,
-            use_container_width=True,
-            hide_index=True,
+        df_orders = pd.DataFrame(formatted_rows)
+        
+        gb = GridOptionsBuilder.from_dataframe(
+            df_orders,
+            editable=False,
+            sortable=True,
+            filterable=True,
+            resizable=True
+        )
+
+        # Configure columns for better display
+        gb.configure_column("Nilai", type=["numericColumn", "rightAligned"], precision=0)
+        gb.configure_selection("disabled")
+        
+        grid_options = gb.build()
+        
+        AgGrid(
+            df_orders,
+            gridOptions=grid_options,
+            allow_unsafe_jscode=True,  # Set to True to allow JsCode objects in gridOptions
+            enable_enterprise_modules=False,
+            height=300,
+            width='100%',
+            data_return_mode='AS_INPUT',
+            update_mode='VALUE_CHANGED',
+            fit_columns_on_grid_load=True,
+            key='recent_orders_grid',
+            theme='streamlit', # Use the Streamlit theme
         )
     else:
         st.info("Belum ada data yang bisa ditampilkan.")

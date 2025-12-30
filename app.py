@@ -7,6 +7,7 @@ from ui.pages.dashboard import render_dashboard_page
 from ui.pages.ba_sales_report import render_ba_sales_report_page
 from ui.pages.stock_control import render_stock_control_page
 from ui.pages.dsi_report import render_dsi_report_page
+from ui.pages.stock_card import render_stock_card_page
 
 # Configure page
 st.set_page_config(
@@ -38,7 +39,13 @@ def main():
     auth_components.render_logout_button()
     
     # Create tabs for different pages
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 Dashboard", "💰 BA Sales Report", "📦 Stock Control", "📋 DSI Report"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "📊 Dashboard",
+        "💰 BA Sales Report",
+        "📦 Stock Control",
+        "📋 DSI Report",
+        "📇 Stock Card",
+    ])
     
     with tab1:
         render_dashboard_page()
@@ -51,6 +58,9 @@ def main():
     
     with tab4:
         render_dsi_report_page()
+    
+    with tab5:
+        render_stock_card_page()
 
 if __name__ == "__main__":
     main()

@@ -5,3 +5,5 @@ openpyxl>=3.0.0
 plotly>=5.0.0
 odoorpc>=0.9.0
 python-dotenv>=1.0.0
+
+streamlit-aggrid
