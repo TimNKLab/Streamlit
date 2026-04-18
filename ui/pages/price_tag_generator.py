@@ -146,6 +146,8 @@ class PriceTagPage:
             st.session_state.price_tag_items[idx]['diskon'] = self._format_price_input(product.get('diskon'))
             st.session_state.price_tag_items[idx]['status'] = '✅ Ditemukan'
             st.session_state.price_tag_items[idx]['in_system'] = True
+            # Regenerate key to force widget refresh with new values
+            st.session_state.price_tag_items[idx]['key_prefix'] = f"row_{idx}_{datetime.now().strftime('%H%M%S%f')}"
             return True
         else:
             # Not found - require manual entry
@@ -174,6 +176,8 @@ class PriceTagPage:
                 item['diskon'] = self._format_price_input(product.get('diskon'))
                 item['status'] = '✅ Ditemukan'
                 item['in_system'] = True
+                # Regenerate key to force widget refresh
+                item['key_prefix'] = f"row_{idx}_{datetime.now().strftime('%H%M%S%f')}"
                 found_count += 1
             else:
                 item['status'] = '⚠️ Isi manual'
@@ -371,8 +375,12 @@ class PriceTagPage:
             except (ValueError, TypeError):
                 diskon = None
             
+            # Debug logging
+            print(f"[DEBUG] Item: barcode={barcode}, name={name[:20] if name else 'EMPTY'}, het={het}")
+            
             # Require at least name and barcode
             if not name:
+                print(f"[DEBUG] SKIPPED: no name for barcode {barcode}")
                 continue
             
             items.append({
@@ -382,11 +390,14 @@ class PriceTagPage:
                 'diskon': diskon,
             })
         
+        print(f"[DEBUG] Total valid items: {len(items)}")
         return items
     
     def generate_pdf(self):
         """Generate PDF from current items."""
+        print(f"[DEBUG] generate_pdf called")
         items = self._collect_valid_items()
+        print(f"[DEBUG] Collected {len(items)} items for PDF")
         
         if not items:
             st.error("❌ Tidak ada item valid untuk dicetak. Isi barcode dan nama produk terlebih dahulu.")
@@ -398,7 +409,9 @@ class PriceTagPage:
         
         try:
             with st.spinner("🔄 Membuat PDF..."):
+                print(f"[DEBUG] Calling service.generate_pdf with {len(items)} items")
                 pdf_bytes = self.service.generate_pdf(items)
+                print(f"[DEBUG] PDF generated: {len(pdf_bytes)} bytes")
                 
                 # Validate PDF was created
                 if not pdf_bytes or len(pdf_bytes) < 100:
