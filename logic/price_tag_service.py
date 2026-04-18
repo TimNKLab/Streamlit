@@ -2,10 +2,14 @@
 
 import os
 import io
+from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 import pandas as pd
 import streamlit as st
+
+# Get project root (works locally and on Streamlit Cloud)
+PROJECT_ROOT = Path(__file__).parent.parent
 
 # PDF generation imports
 try:
@@ -55,9 +59,12 @@ class PriceTagService:
     TAG_W = 5 * cm  # slightly smaller to fit on page
     TAG_H = 3 * cm
     
-    def __init__(self, fallback_db_path: str = "data/products.xlsx", duckdb_path: str = "data/products.duckdb", auto_convert: bool = True, use_memory_cache: bool = True):
-        self.fallback_db_path = fallback_db_path
-        self.duckdb_path = duckdb_path
+    def __init__(self, fallback_db_path: str = None, duckdb_path: str = None, auto_convert: bool = True, use_memory_cache: bool = True):
+        # Use absolute paths (works on local and Streamlit Cloud)
+        self.fallback_db_path = fallback_db_path or str(PROJECT_ROOT / "data" / "products.xlsx")
+        self.duckdb_path = duckdb_path or str(PROJECT_ROOT / "data" / "products.duckdb")
+        self.parquet_path = self.duckdb_path.replace('.duckdb', '.parquet')
+        
         self._products: Dict[str, Dict[str, Any]] = {}
         self._duckdb_conn = None
         self._font_loaded = False
@@ -96,9 +103,8 @@ class PriceTagService:
     def _auto_convert_if_needed(self):
         """Auto-convert Excel to Parquet if Parquet doesn't exist or is older than Excel."""
         try:
-            parquet_path = self.duckdb_path.replace('.duckdb', '.parquet')
             excel_exists = os.path.exists(self.fallback_db_path)
-            parquet_exists = os.path.exists(parquet_path)
+            parquet_exists = os.path.exists(self.parquet_path)
             
             if not excel_exists:
                 return  # No Excel to convert
@@ -111,7 +117,7 @@ class PriceTagService:
             else:
                 # Compare modification times
                 excel_mtime = os.path.getmtime(self.fallback_db_path)
-                parquet_mtime = os.path.getmtime(parquet_path)
+                parquet_mtime = os.path.getmtime(self.parquet_path)
                 if excel_mtime > parquet_mtime:
                     needs_conversion = True
                     print(f"[PARQUET] Excel is newer, will reconvert")
@@ -125,7 +131,6 @@ class PriceTagService:
     def _convert_excel_to_parquet(self):
         """Convert Excel to Parquet (compressed, fast columnar format)."""
         try:
-            parquet_path = self.duckdb_path.replace('.duckdb', '.parquet')
             print(f"[PARQUET] Converting {self.fallback_db_path}...")
             df = pd.read_excel(self.fallback_db_path)
             
@@ -135,13 +140,16 @@ class PriceTagService:
             
             print(f"[PARQUET] Loaded {len(df)} products from Excel")
             
+            # Ensure data directory exists
+            os.makedirs(os.path.dirname(self.parquet_path), exist_ok=True)
+            
             # Write to Parquet (compressed)
-            df.to_parquet(parquet_path, index=False, compression='zstd')
+            df.to_parquet(self.parquet_path, index=False, compression='zstd')
             
             excel_size = os.path.getsize(self.fallback_db_path) / 1024 / 1024
-            parquet_size = os.path.getsize(parquet_path) / 1024 / 1024
+            parquet_size = os.path.getsize(self.parquet_path) / 1024 / 1024
             
-            print(f"[PARQUET] Created: {parquet_path}")
+            print(f"[PARQUET] Created: {self.parquet_path}")
             print(f"[PARQUET] Size: {excel_size:.1f}MB (Excel) -> {parquet_size:.1f}MB (Parquet)")
             
         except Exception as e:
@@ -155,16 +163,16 @@ class PriceTagService:
                 print(f"[CACHE] Products already in memory ({len(self._products)} items), skipping reload")
                 return
             
-            parquet_path = self.duckdb_path.replace('.duckdb', '.parquet')
-            if not os.path.exists(parquet_path):
+            if not os.path.exists(self.parquet_path):
+                print(f"[CACHE] Parquet not found at {self.parquet_path}")
                 return
             
-            print(f"[CACHE] Loading Parquet into memory...")
+            print(f"[CACHE] Loading Parquet into memory from {self.parquet_path}...")
             import time
             start = time.time()
             
             # Read Parquet into DataFrame then convert to dict
-            df = pd.read_parquet(parquet_path)
+            df = pd.read_parquet(self.parquet_path)
             
             # Convert to dict for O(1) lookups
             for _, row in df.iterrows():
@@ -192,14 +200,13 @@ class PriceTagService:
     
     def _load_duckdb(self) -> bool:
         """Try to load Parquet via DuckDB. Returns True if successful."""
-        parquet_path = self.duckdb_path.replace('.duckdb', '.parquet')
-        if not HAS_DUCKDB or not os.path.exists(parquet_path):
+        if not HAS_DUCKDB or not os.path.exists(self.parquet_path):
             return False
         
         try:
             # Connect to in-memory DuckDB and create view for Parquet
             self._duckdb_conn = duckdb.connect(":memory:")
-            self._duckdb_conn.execute(f"CREATE VIEW products AS SELECT * FROM read_parquet('{parquet_path}')")
+            self._duckdb_conn.execute(f"CREATE VIEW products AS SELECT * FROM read_parquet('{self.parquet_path}')")
             # Test query
             result = self._duckdb_conn.execute("SELECT COUNT(*) FROM products").fetchone()
             self._use_duckdb = True
