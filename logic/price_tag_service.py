@@ -546,7 +546,9 @@ class PriceTagService:
     
     def generate_pdf(self, items: List[Dict[str, Any]], output_path: Optional[str] = None) -> bytes:
         """Generate PDF with price tags. Returns PDF bytes."""
+        print(f"[PDF] generate_pdf called with {len(items)} items")
         if not HAS_REPORTLAB:
+            print(f"[PDF] ERROR: reportlab not available")
             raise ImportError("reportlab is required for PDF generation. Install with: pip install reportlab")
         
         PAGE_W, PAGE_H = A4
@@ -584,9 +586,12 @@ class PriceTagService:
         pdf_bytes = buffer.getvalue()
         buffer.close()
         
+        print(f"[PDF] Saved to buffer: {len(pdf_bytes)} bytes")
+        
         # Also save to file if path provided
         if output_path:
             with open(output_path, 'wb') as f:
                 f.write(pdf_bytes)
+            print(f"[PDF] Saved to file: {output_path}")
         
         return pdf_bytes
