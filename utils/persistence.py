@@ -134,3 +134,43 @@ def has_saved_session() -> bool:
         
     except Exception:
         return False
+
+
+# Storage key for active tab
+ACTIVE_TAB_KEY = "nk_lab_active_tab"
+TAB_NAMES = ["dashboard", "ba_sales", "stock_control", "dsi_report", "stock_card", "price_tag"]
+
+def save_active_tab(tab_name: str) -> bool:
+    """Save current active tab to localStorage."""
+    try:
+        conn = _get_localstorage()
+        conn.setLocalStorageVal(key=ACTIVE_TAB_KEY, val=tab_name)
+        return True
+    except Exception as e:
+        print(f"[PERSISTENCE] Save tab failed: {e}")
+        return False
+
+def restore_active_tab() -> str:
+    """Restore active tab from localStorage. Returns tab name or 'dashboard' as default."""
+    try:
+        conn = _get_localstorage()
+        tab_name = conn.getLocalStorageVal(key=ACTIVE_TAB_KEY)
+        if tab_name and tab_name in TAB_NAMES:
+            return tab_name
+        return "dashboard"
+    except Exception as e:
+        print(f"[PERSISTENCE] Restore tab failed: {e}")
+        return "dashboard"
+
+def has_saved_barcodes() -> bool:
+    """Check if price tag has saved barcodes - use to prioritize price_tag tab."""
+    try:
+        conn = _get_localstorage()
+        data = conn.getLocalStorageVal(key=PRICE_TAG_STORAGE_KEY)
+        if not data:
+            return False
+        payload = json.loads(data)
+        items = payload.get('items', [])
+        return len(items) > 0
+    except Exception:
+        return False
