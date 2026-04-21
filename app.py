@@ -9,6 +9,7 @@ from ui.pages.stock_control import render_stock_control_page
 from ui.pages.dsi_report import render_dsi_report_page
 from ui.pages.stock_card import render_stock_card_page
 from ui.pages.price_tag_generator import render_price_tag_page
+from utils.persistence import save_active_tab, restore_active_tab, has_saved_barcodes
 
 # Configure page
 st.set_page_config(
@@ -39,33 +40,39 @@ def main():
     # Render logout button
     auth_components.render_logout_button()
     
-    # Create tabs for different pages
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-        "📊 Dashboard",
-        "💰 BA Sales Report",
-        "📦 Stock Control",
-        "📋 DSI Report",
-        "📇 Stock Card",
-        "🏷️ Price Tag",
-    ])
+    # Determine default tab: prioritize price_tag if has saved barcodes, else restore last tab
+    if 'active_tab' not in st.session_state:
+        if has_saved_barcodes():
+            st.session_state.active_tab = "price_tag"
+        else:
+            st.session_state.active_tab = restore_active_tab()
     
-    with tab1:
-        render_dashboard_page()
+    # Tab definitions
+    tabs = {
+        "dashboard": ("📊 Dashboard", render_dashboard_page),
+        "ba_sales": ("💰 BA Sales Report", render_ba_sales_report_page),
+        "stock_control": ("📦 Stock Control", render_stock_control_page),
+        "dsi_report": ("📋 DSI Report", render_dsi_report_page),
+        "stock_card": ("📇 Stock Card", render_stock_card_page),
+        "price_tag": ("🏷️ Price Tag", render_price_tag_page),
+    }
     
-    with tab2:
-        render_ba_sales_report_page()
+    # Render tab buttons
+    tab_cols = st.columns(len(tabs))
+    for idx, (tab_key, (tab_label, _)) in enumerate(tabs.items()):
+        with tab_cols[idx]:
+            is_active = st.session_state.active_tab == tab_key
+            btn_type = "primary" if is_active else "secondary"
+            if st.button(tab_label, key=f"tab_{tab_key}", type=btn_type, use_container_width=True):
+                st.session_state.active_tab = tab_key
+                save_active_tab(tab_key)
+                st.rerun()
     
-    with tab3:
-        render_stock_control_page()
+    st.markdown("---")
     
-    with tab4:
-        render_dsi_report_page()
-    
-    with tab5:
-        render_stock_card_page()
-    
-    with tab6:
-        render_price_tag_page()
+    # Render active tab content
+    _, render_func = tabs[st.session_state.active_tab]
+    render_func()
 
 if __name__ == "__main__":
     main()
