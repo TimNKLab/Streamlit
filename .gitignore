@@ -2,3 +2,5 @@
 .env
 # Downloaded fonts
 fonts/*.ttf
+# Session persistence data
+session_data/
