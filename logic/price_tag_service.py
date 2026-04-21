@@ -55,8 +55,8 @@ except ImportError:
 class PriceTagService:
     """Service for price tag generation and product database management."""
     
-    # Tag dimensions (6cm x 4cm)
-    TAG_W = 5 * cm  # slightly smaller to fit on page
+    # Tag dimensions - optimized for 4 tags per A4 row
+    TAG_W = 4.8 * cm  # narrower for 4-column layout
     TAG_H = 3 * cm
     
     def __init__(self, fallback_db_path: str = None, duckdb_path: str = None, auto_convert: bool = True, use_memory_cache: bool = True):
@@ -575,9 +575,9 @@ class PriceTagService:
         
         PAGE_W, PAGE_H = A4
         
-        MARGIN_X = 0.5 * cm
+        MARGIN_X = 0.3 * cm  # tighter margins for 4-column
         MARGIN_Y = 0.5 * cm
-        GAP_X = 0.3 * cm
+        GAP_X = 0.2 * cm      # tighter gaps
         GAP_Y = 0.3 * cm
         
         cols = max(1, int((PAGE_W - 2 * MARGIN_X + GAP_X) / (self.TAG_W + GAP_X)))

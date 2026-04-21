@@ -20,7 +20,7 @@ def get_price_tag_service() -> PriceTagService:
 class PriceTagPage:
     """Price Tag Generator page UI component."""
     
-    MAX_ITEMS = 27
+    MAX_ITEMS = 32
     
     def __init__(self):
         # Get cached service (database loaded once per session)
