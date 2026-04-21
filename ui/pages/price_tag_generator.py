@@ -4,6 +4,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 from logic.price_tag_service import PriceTagService
+from utils.persistence import save_session, restore_session, clear_session, has_saved_session
 
 
 @st.cache_resource(ttl=3600)  # Cache for 1 hour across all rerenders
@@ -19,7 +20,7 @@ def get_price_tag_service() -> PriceTagService:
 class PriceTagPage:
     """Price Tag Generator page UI component."""
     
-    MAX_ITEMS = 20
+    MAX_ITEMS = 27
     
     def __init__(self):
         # Get cached service (database loaded once per session)
@@ -27,7 +28,7 @@ class PriceTagPage:
         self.init_session_state()
     
     def init_session_state(self):
-        """Initialize session state variables."""
+        """Initialize session state variables with localStorage persistence."""
         if 'price_tag_items' not in st.session_state:
             st.session_state.price_tag_items = []
         if 'price_tag_custom_db' not in st.session_state:
@@ -42,8 +43,27 @@ class PriceTagPage:
             st.session_state.price_tag_items_hash = None
         if 'price_tag_batch_mode' not in st.session_state:
             st.session_state.price_tag_batch_mode = True  # Default: batch lookup (faster)
+        if 'price_tag_restored' not in st.session_state:
+            st.session_state.price_tag_restored = False
         
-        # Initialize with 20 empty rows for perceived speed
+        # Try to restore from localStorage on first load
+        if not st.session_state.price_tag_restored:
+            restored_items = restore_session()
+            if restored_items:
+                # Restore saved items, filling up to MAX_ITEMS
+                saved_count = len(restored_items)
+                if saved_count > 0:
+                    # Create empty rows to fill
+                    st.session_state.price_tag_items = restored_items[:self.MAX_ITEMS]
+                    # Pad with empty rows if needed
+                    while len(st.session_state.price_tag_items) < self.MAX_ITEMS:
+                        st.session_state.price_tag_items.append(
+                            self._create_empty_row(len(st.session_state.price_tag_items))
+                        )
+                    st.toast(f"🔄 Restored {saved_count} items from previous session", icon="🔄")
+            st.session_state.price_tag_restored = True
+        
+        # Initialize with empty rows if still empty (first time, no restore)
         if not st.session_state.price_tag_items:
             st.session_state.price_tag_items = [
                 self._create_empty_row(i) for i in range(self.MAX_ITEMS)
@@ -202,13 +222,15 @@ class PriceTagPage:
                 st.session_state.price_tag_focus_idx = len(st.session_state.price_tag_items) - 1
     
     def _clear_all(self):
-        """Clear all rows - callback version."""
+        """Clear all rows and localStorage - callback version."""
         st.session_state.price_tag_items = [
             self._create_empty_row(i) for i in range(self.MAX_ITEMS)
         ]
         st.session_state.price_tag_pdf_ready = False
         st.session_state.price_tag_pdf_bytes = None
         st.session_state.price_tag_focus_idx = 0
+        # Clear persisted session
+        clear_session()
     
     def _add_row(self):
         """Add a new empty row - callback version."""
@@ -350,6 +372,12 @@ class PriceTagPage:
         filled_count = sum(1 for item in st.session_state.price_tag_items 
                          if item['barcode'].strip())
         st.metric("Item Scanned", f"{filled_count} / {self.MAX_ITEMS}")
+        
+        # Auto-save to localStorage (best-effort, doesn't block UI)
+        try:
+            save_session(st.session_state.price_tag_items)
+        except Exception:
+            pass  # Silently fail - persistence is best-effort
     
     def _collect_valid_items(self) -> list:
         """Collect and validate items for PDF generation."""
@@ -487,7 +515,12 @@ class PriceTagPage:
     def render(self):
         """Render the complete Price Tag Generator page."""
         st.title("🏷️ Price Tag Generator")
-        st.markdown("Generator label harga 6cm x 4cm dengan auto-lookup database produk")
+        
+        # Connection status indicator with persistence info
+        if has_saved_session():
+            st.caption("💾 Session auto-saved to browser - will restore if disconnected")
+        else:
+            st.caption("📡 Scan items to enable auto-save")
         
         self.render_database_section()
         self.render_items_table()
