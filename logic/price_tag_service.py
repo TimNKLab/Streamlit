@@ -81,21 +81,43 @@ class PriceTagService:
             self._load_parquet_to_memory()
     
     def _load_fonts(self):
-        """Load Poppins fonts if available."""
+        """Load Poppins fonts from Google Fonts CDN (download once, cache locally)."""
         global MAIN_FONT, MAIN_FONT_BOLD
         self.MAIN_FONT = "Helvetica"
         self.MAIN_FONT_BOLD = "Helvetica-Bold"
         
         if HAS_REPORTLAB:
-            # Try to load Poppins fonts
             try:
-                if os.path.exists('Poppins-Bold.ttf'):
-                    pdfmetrics.registerFont(TTFont('Poppins-Bold', 'Poppins-Bold.ttf'))
-                    self.MAIN_FONT_BOLD = "Poppins-Bold"
-                if os.path.exists('Poppins-Regular.ttf'):
-                    pdfmetrics.registerFont(TTFont('Poppins-Regular', 'Poppins-Regular.ttf'))
+                # Create fonts directory if needed
+                fonts_dir = PROJECT_ROOT / "fonts"
+                fonts_dir.mkdir(exist_ok=True)
+                
+                # Google Fonts CDN URLs for Poppins (GitHub raw URLs)
+                poppins_regular_url = "https://github.com/google/fonts/raw/main/ofl/poppins/Poppins-Regular.ttf"
+                poppins_bold_url = "https://github.com/google/fonts/raw/main/ofl/poppins/Poppins-Bold.ttf"
+                
+                regular_path = fonts_dir / "Poppins-Regular.ttf"
+                bold_path = fonts_dir / "Poppins-Bold.ttf"
+                
+                # Download if not cached
+                import urllib.request
+                if not regular_path.exists():
+                    urllib.request.urlretrieve(poppins_regular_url, regular_path)
+                    print(f"[FONTS] Downloaded Poppins-Regular.ttf")
+                if not bold_path.exists():
+                    urllib.request.urlretrieve(poppins_bold_url, bold_path)
+                    print(f"[FONTS] Downloaded Poppins-Bold.ttf")
+                
+                # Register with ReportLab
+                if regular_path.exists():
+                    pdfmetrics.registerFont(TTFont('Poppins-Regular', str(regular_path)))
                     self.MAIN_FONT = "Poppins-Regular"
-            except Exception:
+                if bold_path.exists():
+                    pdfmetrics.registerFont(TTFont('Poppins-Bold', str(bold_path)))
+                    self.MAIN_FONT_BOLD = "Poppins-Bold"
+                    
+            except Exception as e:
+                print(f"[FONTS] Failed to load Poppins: {e}, using Helvetica fallback")
                 pass  # Use default Helvetica
         
         self._font_loaded = True
