@@ -413,7 +413,12 @@ class PriceTagService:
             # Exactly one match - return the product
             barcode = matching_barcodes[0]
             print(f"[FUZZY_LOOKUP] Single match: {barcode}")
-            return self._products.get(barcode)
+            product = self._products.get(barcode)
+            print(f"[FUZZY_LOOKUP] Product lookup: {product is not None}, _products has {len(self._products)} items")
+            if not product:
+                print(f"[FUZZY_LOOKUP] ERROR: Barcode {barcode} in index but not in _products!")
+                print(f"[FUZZY_LOOKUP] Sample keys in _products: {list(self._products.keys())[:5]}")
+            return product
         
         if len(matching_barcodes) > 1:
             # Ambiguous: multiple SKUs share same last 6 digits
