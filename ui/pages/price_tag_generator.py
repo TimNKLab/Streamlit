@@ -2,6 +2,7 @@
 
 import streamlit as st
 import pandas as pd
+import math
 from datetime import datetime
 from logic.price_tag_service import PriceTagService
 from utils.persistence import save_session, restore_session, clear_session, has_saved_session
@@ -102,7 +103,7 @@ class PriceTagPage:
     
     def _format_price_input(self, value: any) -> str:
         """Format price value for input display."""
-        if value is None or value == '':
+        if value is None or value == '' or (isinstance(value, float) and math.isnan(value)):
             return ''
         try:
             # Remove decimal if it's a whole number
