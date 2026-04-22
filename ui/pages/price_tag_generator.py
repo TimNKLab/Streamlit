@@ -126,13 +126,16 @@ class PriceTagPage:
         is_6_char_suffix = len(barcode) == 6
         is_full_barcode = len(barcode) >= 8
         if not (is_6_char_suffix or is_full_barcode):
+            print(f"[SHOULD_LOOKUP] Row {idx}: BLOCKED - length not 6 or 8+ (len={len(barcode)})")
             return False
 
         # Prevent duplicate lookups of same barcode
         last_lookup = st.session_state.price_tag_items[idx].get('_last_lookup')
         if last_lookup == barcode:
+            print(f"[SHOULD_LOOKUP] Row {idx}: BLOCKED - already looked up '{barcode}'")
             return False
 
+        print(f"[SHOULD_LOOKUP] Row {idx}: ALLOW lookup for '{barcode}'")
         return True
     
     def _lookup_barcode(self, barcode: str, idx: int) -> bool:
