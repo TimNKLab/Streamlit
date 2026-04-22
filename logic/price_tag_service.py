@@ -66,6 +66,7 @@ class PriceTagService:
         self.parquet_path = self.duckdb_path.replace('.duckdb', '.parquet')
         
         self._products: Dict[str, Dict[str, Any]] = {}
+        self._suffix_index: Dict[str, List[str]] = {}  # last 6 digits -> list of barcodes
         self._duckdb_conn = None
         self._font_loaded = False
         self._use_duckdb = False
@@ -193,10 +194,13 @@ class PriceTagService:
             import time
             start = time.time()
             
-            # Read Parquet into DataFrame then convert to dict
+            # Read Parquet into DataFrame
             df = pd.read_parquet(self.parquet_path)
             
-            # Convert to dict for O(1) lookups
+            # Create barcode_suffix column (last 6 digits)
+            df['barcode_suffix'] = df['barcode'].astype(str).str.strip().str[-6:]
+            
+            # Convert to dict for O(1) lookups - include barcode_suffix
             for _, row in df.iterrows():
                 barcode = str(row.get('barcode', '')).strip()
                 if barcode:
@@ -204,11 +208,32 @@ class PriceTagService:
                         'name': str(row.get('name', '')),
                         'het': self._to_float(row.get('het')),
                         'diskon': self._to_float(row.get('diskon')) if 'diskon' in df.columns else None,
+                        'barcode_suffix': str(row.get('barcode_suffix', '')),
                     }
             
             elapsed = time.time() - start
             print(f"[CACHE] Loaded {len(self._products)} products into memory in {elapsed:.2f}s")
             print(f"[CACHE] Lookup speed: ~0.000001s (1 microsecond)")
+            
+            # Build suffix index for fuzzy lookup (last 6 digits)
+            self._suffix_index.clear()
+            for barcode in self._products.keys():
+                suffix = barcode[-6:] if len(barcode) >= 6 else barcode
+                if suffix not in self._suffix_index:
+                    self._suffix_index[suffix] = []
+                self._suffix_index[suffix].append(barcode)
+            
+            print(f"[CACHE] Built suffix index: {len(self._suffix_index)} unique suffixes")
+            
+            # Debug: Check specific suffix
+            debug_suffix = "104041"
+            if debug_suffix in self._suffix_index:
+                print(f"[CACHE] Suffix '{debug_suffix}' maps to: {self._suffix_index[debug_suffix]}")
+            else:
+                print(f"[CACHE] Suffix '{debug_suffix}' NOT FOUND in index")
+                # Show some sample suffixes
+                sample_suffixes = list(self._suffix_index.keys())[:5]
+                print(f"[CACHE] Sample suffixes: {sample_suffixes}")
             
         except Exception as e:
             print(f"[CACHE] Failed to load: {e}")
@@ -272,12 +297,20 @@ class PriceTagService:
         3. Excel fallback file (if exists)
         4. Hardcoded data (fastest startup, no file I/O)
         """
-        self._products.clear()
+        # Don't clear if products already loaded (e.g., by _load_parquet_to_memory in __init__)
+        already_loaded = len(self._products) > 0
+        if not already_loaded:
+            self._products.clear()
         self._use_duckdb = False
         
         # Option 1: Use hardcoded data only
         if use_hardcoded:
             return TOP_PRODUCTS.copy()
+        
+        # If already loaded, skip reload
+        if already_loaded:
+            print(f"[DB_LOAD] Products already loaded ({len(self._products)} items), skipping reload")
+            return self._products
         
         try:
             # Option 2: Try Parquet + DuckDB first (fastest for large catalogs)
@@ -309,7 +342,10 @@ class PriceTagService:
                     st.error(f"Missing required columns: {', '.join(missing_cols)}")
                     return TOP_PRODUCTS.copy()
                 
-                # Load products from DataFrame
+                # Create barcode_suffix column (last 6 digits)
+                df['barcode_suffix'] = df['barcode'].astype(str).str.strip().str[-6:]
+                
+                # Load products from DataFrame - include barcode_suffix
                 for _, row in df.iterrows():
                     barcode = str(row.get('barcode', '')).strip()
                     if barcode:
@@ -317,6 +353,7 @@ class PriceTagService:
                             'name': str(row.get('name', '')),
                             'het': self._to_float(row.get('het')),
                             'diskon': self._to_float(row.get('diskon')) if 'diskon' in df.columns else None,
+                            'barcode_suffix': str(row.get('barcode_suffix', '')),
                         }
                 
                 return self._products
@@ -353,6 +390,58 @@ class PriceTagService:
             if result:
                 return result
         
+        return None
+    
+    def lookup_product_by_suffix(self, suffix: str) -> Optional[Dict[str, Any]]:
+        """Lookup product by last 6 digits of barcode using suffix index.
+        
+        Priority:
+            1. Use suffix index (O(1)) to find barcodes with matching suffix
+            2. If exactly one match -> return product
+            3. If multiple matches -> return AMBIGUOUS
+            4. If no matches -> fallback to exact barcode lookup
+        
+        Returns:
+            - Product dict if exactly one match found
+            - None if no matches (after fallback too)
+            - {"_status": "AMBIGUOUS"} if multiple SKUs share this suffix
+        """
+        suffix = suffix.strip()
+        print(f"[FUZZY_LOOKUP] Searching for suffix: {suffix}")
+        
+        if len(suffix) != 6:
+            print(f"[FUZZY_LOOKUP] Invalid suffix length: {suffix} (len={len(suffix)})")
+            return None
+        
+        # Use suffix index for O(1) lookup
+        matching_barcodes = self._suffix_index.get(suffix, [])
+        print(f"[FUZZY_LOOKUP] Suffix index found {len(matching_barcodes)} barcodes for suffix={suffix}")
+        
+        if len(matching_barcodes) == 1:
+            # Exactly one match - return the product
+            barcode = matching_barcodes[0]
+            print(f"[FUZZY_LOOKUP] Single match: {barcode}")
+            product = self._products.get(barcode)
+            print(f"[FUZZY_LOOKUP] Product lookup: {product is not None}, _products has {len(self._products)} items")
+            if not product:
+                print(f"[FUZZY_LOOKUP] ERROR: Barcode {barcode} in index but not in _products!")
+                print(f"[FUZZY_LOOKUP] Sample keys in _products: {list(self._products.keys())[:5]}")
+            return product
+        
+        if len(matching_barcodes) > 1:
+            # Ambiguous: multiple SKUs share same last 6 digits
+            print(f"[FUZZY_LOOKUP] Ambiguous: {matching_barcodes}")
+            return {"_status": "AMBIGUOUS"}
+        
+        # No suffix matches - fallback to exact barcode lookup
+        # (in case the 6-digit input IS the full barcode)
+        print(f"[FUZZY_LOOKUP] No suffix match, trying exact barcode lookup...")
+        exact_match = self._products.get(suffix)
+        if exact_match:
+            print(f"[FUZZY_LOOKUP] Found via exact match: {suffix}")
+            return exact_match
+        
+        print(f"[FUZZY_LOOKUP] No matches found")
         return None
     
     @property
