@@ -147,7 +147,9 @@ class PriceTagPage:
 
         # Use fuzzy lookup (expects last 6 chars of barcode)
         if len(barcode) == 6:
+            print(f"[UI_LOOKUP] Calling lookup_product_by_suffix('{barcode}')")
             product = self.service.lookup_product_by_suffix(barcode)
+            print(f"[UI_LOOKUP] Got product: {product is not None}, type={type(product)}, keys={list(product.keys()) if product else 'N/A'}")
 
             if product and product.get("_status") == "AMBIGUOUS":
                 # Ambiguous match - clear barcode, show manual entry required
@@ -324,7 +326,9 @@ class PriceTagPage:
                 # Individual lookup only in non-batch mode
                 if not st.session_state.price_tag_batch_mode:
                     if barcode.strip() and self._should_lookup(barcode, idx):
+                        print(f"[RENDER] About to call _lookup_barcode('{barcode}', {idx})")
                         found = self._lookup_barcode(barcode, idx)
+                        print(f"[RENDER] _lookup_barcode returned: {found}")
                         if found and idx < self.MAX_ITEMS - 1:
                             st.session_state.price_tag_focus_idx = idx + 1
                         st.rerun()
