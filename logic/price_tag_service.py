@@ -297,12 +297,20 @@ class PriceTagService:
         3. Excel fallback file (if exists)
         4. Hardcoded data (fastest startup, no file I/O)
         """
-        self._products.clear()
+        # Don't clear if products already loaded (e.g., by _load_parquet_to_memory in __init__)
+        already_loaded = len(self._products) > 0
+        if not already_loaded:
+            self._products.clear()
         self._use_duckdb = False
         
         # Option 1: Use hardcoded data only
         if use_hardcoded:
             return TOP_PRODUCTS.copy()
+        
+        # If already loaded, skip reload
+        if already_loaded:
+            print(f"[DB_LOAD] Products already loaded ({len(self._products)} items), skipping reload")
+            return self._products
         
         try:
             # Option 2: Try Parquet + DuckDB first (fastest for large catalogs)
