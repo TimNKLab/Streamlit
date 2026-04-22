@@ -2,12 +2,13 @@
 
 import streamlit as st
 import pandas as pd
+import math
 from datetime import datetime
 from logic.price_tag_service import PriceTagService
 from utils.persistence import save_session, restore_session, clear_session, has_saved_session
 
 
-@st.cache_resource(ttl=3600)  # Cache for 1 hour across all rerenders
+@st.cache_resource(ttl=3600, hash_funcs={PriceTagService: lambda x: "v3"})  # Cache for 1 hour, v3 with barcode_suffix column
 def get_price_tag_service() -> PriceTagService:
     """Get or create cached PriceTagService - expensive resource cached globally."""
     print("[CACHE_RESOURCE] Creating PriceTagService (one-time init)...")
@@ -21,6 +22,7 @@ class PriceTagPage:
     """Price Tag Generator page UI component."""
     
     MAX_ITEMS = 32
+    
     
     def __init__(self):
         # Get cached service (database loaded once per session)
@@ -42,7 +44,7 @@ class PriceTagPage:
         if 'price_tag_items_hash' not in st.session_state:
             st.session_state.price_tag_items_hash = None
         if 'price_tag_batch_mode' not in st.session_state:
-            st.session_state.price_tag_batch_mode = True  # Default: batch lookup (faster)
+            st.session_state.price_tag_batch_mode = False  # Default: single lookup (slower but more accurate)
         if 'price_tag_restored' not in st.session_state:
             st.session_state.price_tag_restored = False
         
@@ -60,7 +62,7 @@ class PriceTagPage:
                         st.session_state.price_tag_items.append(
                             self._create_empty_row(len(st.session_state.price_tag_items))
                         )
-                    st.toast(f"🔄 Restored {saved_count} items from previous session", icon="🔄")
+                    st.toast(f"Kembalikan {saved_count} SKU dari sesi sebelumnya")
             st.session_state.price_tag_restored = True
         
         # Initialize with empty rows if still empty (first time, no restore)
@@ -101,7 +103,7 @@ class PriceTagPage:
     
     def _format_price_input(self, value: any) -> str:
         """Format price value for input display."""
-        if value is None or value == '':
+        if value is None or value == '' or (isinstance(value, float) and math.isnan(value)):
             return ''
         try:
             # Remove decimal if it's a whole number
@@ -114,64 +116,82 @@ class PriceTagPage:
     
     def render_database_section(self):
         """Render database upload section."""
-        st.subheader("📦 Database Produk")
-        
-        col1, col2 = st.columns([3, 1])
-        
-        with col1:
-            uploaded_file = st.file_uploader(
-                "Upload file Excel database produk (opsional)",
-                type=['xlsx', 'xls'],
-                key="price_tag_db_upload",
-                help="Kolom wajib: barcode, name, het. Kolom opsional: diskon"
-            )
-        
-        with col2:
-            if uploaded_file:
-                st.session_state.price_tag_custom_db = uploaded_file
-                # Reload database with custom file (one-time load)
-                self.service.load_database(uploaded_file)
-                st.success(f"✅ {self.service.product_count} produk")
-            else:
-                # Show current loaded count (database already loaded in get_price_tag_service)
-                st.info(f"📄 {self.service.product_count} produk")
-        
-        st.markdown("---")
-    
+
     def _should_lookup(self, barcode: str, idx: int) -> bool:
         """Check if we should perform lookup (debounce logic)."""
         barcode = barcode.strip()
-        if not barcode or len(barcode) < 8:  # Most barcodes are 8+ digits
+        if not barcode:
             return False
-        
+
+        # Allow 6-char suffix lookups OR full barcodes (8+ chars)
+        is_6_char_suffix = len(barcode) == 6
+        is_full_barcode = len(barcode) >= 8
+        if not (is_6_char_suffix or is_full_barcode):
+            print(f"[SHOULD_LOOKUP] Row {idx}: BLOCKED - length not 6 or 8+ (len={len(barcode)})")
+            return False
+
         # Prevent duplicate lookups of same barcode
         last_lookup = st.session_state.price_tag_items[idx].get('_last_lookup')
         if last_lookup == barcode:
+            print(f"[SHOULD_LOOKUP] Row {idx}: BLOCKED - already looked up '{barcode}'")
             return False
-        
+
+        print(f"[SHOULD_LOOKUP] Row {idx}: ALLOW lookup for '{barcode}'")
         return True
     
     def _lookup_barcode(self, barcode: str, idx: int) -> bool:
-        """Lookup barcode and update row data. Returns True if found."""
+        """Lookup barcode using fuzzy suffix matching. Returns True if found."""
         barcode = barcode.strip()
-        
+
         # Mark as looked up
         st.session_state.price_tag_items[idx]['_last_lookup'] = barcode
-        
+
+        # Use fuzzy lookup (expects last 6 chars of barcode)
+        if len(barcode) == 6:
+            print(f"[UI_LOOKUP] Calling lookup_product_by_suffix('{barcode}')")
+            product = self.service.lookup_product_by_suffix(barcode)
+            print(f"[UI_LOOKUP] Got product: {product is not None}, type={type(product)}, keys={list(product.keys()) if product else 'N/A'}")
+
+            if product and product.get("_status") == "AMBIGUOUS":
+                # Ambiguous match - clear barcode, show manual entry required
+                st.session_state.price_tag_items[idx]['barcode'] = ''
+                st.session_state.price_tag_items[idx]['name'] = ''
+                st.session_state.price_tag_items[idx]['het'] = ''
+                st.session_state.price_tag_items[idx]['diskon'] = ''
+                st.session_state.price_tag_items[idx]['status'] = 'Isi manual'
+                st.session_state.price_tag_items[idx]['in_system'] = False
+                st.toast(f"⚠️ Baris {idx+1}: Multiple SKUs dengan 6 digit akhir {barcode}", icon="⚠️")
+                # Regenerate key to force widget refresh (clear the input)
+                st.session_state.price_tag_items[idx]['key_prefix'] = f"row_{idx}_{datetime.now().strftime('%H%M%S%f')}"
+                return False
+
+            if product:
+                print(f"[UI_LOOKUP] Found product: {product['name'][:20]}")
+                st.session_state.price_tag_items[idx]['barcode'] = barcode  # Keep the 6-digit input
+                st.session_state.price_tag_items[idx]['name'] = product['name']
+                st.session_state.price_tag_items[idx]['het'] = self._format_price_input(product['het'])
+                st.session_state.price_tag_items[idx]['diskon'] = self._format_price_input(product.get('diskon'))
+                st.session_state.price_tag_items[idx]['status'] = 'Ditemukan'
+                st.session_state.price_tag_items[idx]['in_system'] = True
+                # Regenerate key to force widget refresh with new values
+                st.session_state.price_tag_items[idx]['key_prefix'] = f"row_{idx}_{datetime.now().strftime('%H%M%S%f')}"
+                print(f"[UI_LOOKUP] Set item[{idx}].name = '{product['name'][:20]}'")
+                return True
+
+        # Fallback: try exact match for backward compatibility (non-6-digit inputs)
         product = self.service.lookup_product(barcode)
-        
+
         if product:
             st.session_state.price_tag_items[idx]['name'] = product['name']
             st.session_state.price_tag_items[idx]['het'] = self._format_price_input(product['het'])
             st.session_state.price_tag_items[idx]['diskon'] = self._format_price_input(product.get('diskon'))
-            st.session_state.price_tag_items[idx]['status'] = '✅ Ditemukan'
+            st.session_state.price_tag_items[idx]['status'] = 'Ditemukan'
             st.session_state.price_tag_items[idx]['in_system'] = True
-            # Regenerate key to force widget refresh with new values
             st.session_state.price_tag_items[idx]['key_prefix'] = f"row_{idx}_{datetime.now().strftime('%H%M%S%f')}"
             return True
         else:
             # Not found - require manual entry
-            st.session_state.price_tag_items[idx]['status'] = '⚠️ Isi manual'
+            st.session_state.price_tag_items[idx]['status'] = 'Isi manual'
             st.session_state.price_tag_items[idx]['in_system'] = False
             return False
     
@@ -179,38 +199,56 @@ class PriceTagPage:
         """Lookup all barcodes at once (batch mode) - much faster than individual lookups."""
         import time
         start = time.time()
-        
+
         found_count = 0
         not_found = []
-        
+        ambiguous = []
+
         for idx, item in enumerate(st.session_state.price_tag_items):
             barcode = item['barcode'].strip()
             if not barcode or item.get('name'):  # Skip empty or already looked up
                 continue
-            
-            product = self.service.lookup_product(barcode)
-            
+
+            # Use fuzzy lookup for 6-char suffix inputs
+            if len(barcode) == 6:
+                product = self.service.lookup_product_by_suffix(barcode)
+
+                if product and product.get("_status") == "AMBIGUOUS":
+                    item['barcode'] = ''
+                    item['name'] = ''
+                    item['het'] = ''
+                    item['diskon'] = ''
+                    item['status'] = 'Isi manual'
+                    item['in_system'] = False
+                    item['key_prefix'] = f"row_{idx}_{datetime.now().strftime('%H%M%S%f')}"
+                    ambiguous.append((idx + 1, barcode))
+                    continue
+            else:
+                product = self.service.lookup_product(barcode)
+
             if product:
                 item['name'] = product['name']
                 item['het'] = self._format_price_input(product['het'])
                 item['diskon'] = self._format_price_input(product.get('diskon'))
-                item['status'] = '✅ Ditemukan'
+                item['status'] = 'Ditemukan'
                 item['in_system'] = True
                 # Regenerate key to force widget refresh
                 item['key_prefix'] = f"row_{idx}_{datetime.now().strftime('%H%M%S%f')}"
                 found_count += 1
             else:
-                item['status'] = '⚠️ Isi manual'
+                item['status'] = 'Isi manual'
                 item['in_system'] = False
                 not_found.append((idx + 1, barcode))
-        
+
         elapsed = time.time() - start
-        
+
         if found_count > 0:
             st.success(f"✅ Found {found_count} products in {elapsed:.2f}s")
+        if ambiguous:
+            st.warning(f"⚠️ {len(ambiguous)} items ambiguous (multiple SKUs with same last 6 digits)")
         if not_found:
             st.warning(f"⚠️ {len(not_found)} items not found in database")
-        
+
         st.rerun()
     
     def _remove_row(self, idx: int):
@@ -237,12 +275,11 @@ class PriceTagPage:
         if len(st.session_state.price_tag_items) < self.MAX_ITEMS:
             st.session_state.price_tag_items.append(self._create_empty_row())
         else:
-            st.toast(f"Maksimum {self.MAX_ITEMS} item!", icon="⚠️")
+            st.toast(f"Maksimal {self.MAX_ITEMS} item!")
     
     def render_items_table(self):
         """Render the items input table."""
-        st.subheader("🏷️ Item Label Harga")
-        
+       
         # Header row
         header_cols = st.columns([0.8, 2.5, 3, 1.5, 1.5, 1.5, 0.8])
         headers = ['#', 'Barcode', 'Nama Produk', 'HET (Rp)', 'Diskon (Rp)', 'Status', '']
@@ -251,6 +288,11 @@ class PriceTagPage:
         
         # Data rows
         items_to_remove = None
+        
+        # Debug: Check first few items
+        for i, debug_item in enumerate(st.session_state.price_tag_items[:3]):
+            if debug_item['barcode'].strip():
+                print(f"[RENDER] Row {i}: barcode={debug_item['barcode']}, name={debug_item['name'][:15] if debug_item['name'] else 'EMPTY'}")
         
         for idx, item in enumerate(st.session_state.price_tag_items):
             key_prefix = item['key_prefix']
@@ -267,6 +309,10 @@ class PriceTagPage:
             
             # Barcode input with debounced lookup
             with cols[1]:
+                # Highlight focused row with border
+                is_focused = (idx == st.session_state.price_tag_focus_idx)
+                border_style = "border: 2px solid #FF6B35; border-radius: 4px; padding: 2px;" if is_focused else ""
+
                 barcode = st.text_input(
                     "Barcode",
                     value=item['barcode'],
@@ -277,11 +323,13 @@ class PriceTagPage:
                 # Update stored value
                 if barcode != item['barcode']:
                     item['barcode'] = barcode
-                
+
                 # Individual lookup only in non-batch mode
                 if not st.session_state.price_tag_batch_mode:
                     if barcode.strip() and self._should_lookup(barcode, idx):
+                        print(f"[RENDER] About to call _lookup_barcode('{barcode}', {idx})")
                         found = self._lookup_barcode(barcode, idx)
+                        print(f"[RENDER] _lookup_barcode returned: {found}")
                         if found and idx < self.MAX_ITEMS - 1:
                             st.session_state.price_tag_focus_idx = idx + 1
                         st.rerun()
@@ -378,6 +426,9 @@ class PriceTagPage:
             save_session(st.session_state.price_tag_items)
         except Exception:
             pass  # Silently fail - persistence is best-effort
+
+        # Auto-focus indicator - visual only (Streamlit doesn't allow programmatic focus)
+        # The ➤ arrow indicator is sufficient, no JavaScript scrolling needed
     
     def _collect_valid_items(self) -> list:
         """Collect and validate items for PDF generation."""
@@ -514,14 +565,8 @@ class PriceTagPage:
     
     def render(self):
         """Render the complete Price Tag Generator page."""
-        st.title("🏷️ Price Tag Generator")
-        
-        # Connection status indicator with persistence info
-        if has_saved_session():
-            st.caption("💾 Session auto-saved to browser - will restore if disconnected")
-        else:
-            st.caption("📡 Scan items to enable auto-save")
-        
+        st.title("Price Tag Generator 😸")
+             
         self.render_database_section()
         self.render_items_table()
         self.render_pdf_section()
