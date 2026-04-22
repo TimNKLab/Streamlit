@@ -66,6 +66,7 @@ class PriceTagService:
         self.parquet_path = self.duckdb_path.replace('.duckdb', '.parquet')
         
         self._products: Dict[str, Dict[str, Any]] = {}
+        self._suffix_index: Dict[str, List[str]] = {}  # last 6 digits -> list of barcodes
         self._duckdb_conn = None
         self._font_loaded = False
         self._use_duckdb = False
@@ -209,6 +210,16 @@ class PriceTagService:
             elapsed = time.time() - start
             print(f"[CACHE] Loaded {len(self._products)} products into memory in {elapsed:.2f}s")
             print(f"[CACHE] Lookup speed: ~0.000001s (1 microsecond)")
+            
+            # Build suffix index for fuzzy lookup (last 6 digits)
+            self._suffix_index.clear()
+            for barcode in self._products.keys():
+                suffix = barcode[-6:] if len(barcode) >= 6 else barcode
+                if suffix not in self._suffix_index:
+                    self._suffix_index[suffix] = []
+                self._suffix_index[suffix].append(barcode)
+            
+            print(f"[CACHE] Built suffix index: {len(self._suffix_index)} unique suffixes")
             
         except Exception as e:
             print(f"[CACHE] Failed to load: {e}")
@@ -354,6 +365,32 @@ class PriceTagService:
                 return result
         
         return None
+    
+    def lookup_product_by_suffix(self, suffix: str) -> Optional[Dict[str, Any]]:
+        """Lookup product by last 6 digits of barcode.
+        
+        Returns:
+            - Product dict if exactly one match found
+            - None if no matches
+            - {"_status": "AMBIGUOUS"} if multiple SKUs share this suffix
+        """
+        suffix = suffix.strip()
+        if len(suffix) != 6 or not suffix.isdigit():
+            return None
+        
+        # Check suffix index
+        matching_barcodes = self._suffix_index.get(suffix, [])
+        
+        if not matching_barcodes:
+            return None
+        
+        if len(matching_barcodes) > 1:
+            # Ambiguous: multiple SKUs share same last 6 digits
+            return {"_status": "AMBIGUOUS"}
+        
+        # Exactly one match - return the product
+        barcode = matching_barcodes[0]
+        return self._products.get(barcode)
     
     @property
     def product_count(self) -> int:
