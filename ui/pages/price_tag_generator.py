@@ -118,14 +118,20 @@ class PriceTagPage:
     def _should_lookup(self, barcode: str, idx: int) -> bool:
         """Check if we should perform lookup (debounce logic)."""
         barcode = barcode.strip()
-        if not barcode or len(barcode) < 8:  # Most barcodes are 8+ digits
+        if not barcode:
             return False
-        
+
+        # Allow 6-digit fuzzy lookups OR full barcodes (8+ digits)
+        is_6_digit_lookup = len(barcode) == 6 and barcode.isdigit()
+        is_full_barcode = len(barcode) >= 8
+        if not (is_6_digit_lookup or is_full_barcode):
+            return False
+
         # Prevent duplicate lookups of same barcode
         last_lookup = st.session_state.price_tag_items[idx].get('_last_lookup')
         if last_lookup == barcode:
             return False
-        
+
         return True
     
     def _lookup_barcode(self, barcode: str, idx: int) -> bool:
@@ -289,6 +295,10 @@ class PriceTagPage:
             
             # Barcode input with debounced lookup
             with cols[1]:
+                # Highlight focused row with border
+                is_focused = (idx == st.session_state.price_tag_focus_idx)
+                border_style = "border: 2px solid #FF6B35; border-radius: 4px; padding: 2px;" if is_focused else ""
+
                 barcode = st.text_input(
                     "Barcode",
                     value=item['barcode'],
@@ -299,7 +309,7 @@ class PriceTagPage:
                 # Update stored value
                 if barcode != item['barcode']:
                     item['barcode'] = barcode
-                
+
                 # Individual lookup only in non-batch mode
                 if not st.session_state.price_tag_batch_mode:
                     if barcode.strip() and self._should_lookup(barcode, idx):
