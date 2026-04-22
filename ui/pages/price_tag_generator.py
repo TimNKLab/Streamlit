@@ -41,6 +41,8 @@ class PriceTagPage:
             st.session_state.price_tag_pdf_bytes = None
         if 'price_tag_focus_idx' not in st.session_state:
             st.session_state.price_tag_focus_idx = 0  # Track which row to focus
+        if '_pending_focus_target' not in st.session_state:
+            st.session_state._pending_focus_target = None  # For auto-focus after rerun
         if 'price_tag_items_hash' not in st.session_state:
             st.session_state.price_tag_items_hash = None
         if 'price_tag_batch_mode' not in st.session_state:
@@ -249,6 +251,18 @@ class PriceTagPage:
         if not_found:
             st.warning(f"⚠️ {len(not_found)} items not found in database")
 
+        # NK_PR_AUTOFOCUS: After batch lookup, focus first empty row for continued scanning
+        first_empty_idx = None
+        for idx, item in enumerate(st.session_state.price_tag_items):
+            if not item['barcode'].strip():
+                first_empty_idx = idx
+                break
+        
+        if first_empty_idx is not None:
+            st.session_state.price_tag_focus_idx = first_empty_idx
+            # NK_PR_AUTOFOCUS: Queue focus for first empty row (processed after rerun)
+            st.session_state._pending_focus_target = first_empty_idx
+
         st.rerun()
     
     def _remove_row(self, idx: int):
@@ -267,6 +281,7 @@ class PriceTagPage:
         st.session_state.price_tag_pdf_ready = False
         st.session_state.price_tag_pdf_bytes = None
         st.session_state.price_tag_focus_idx = 0
+        st.session_state._pending_focus_target = None
         # Clear persisted session
         clear_session()
     
@@ -332,6 +347,8 @@ class PriceTagPage:
                         print(f"[RENDER] _lookup_barcode returned: {found}")
                         if found and idx < self.MAX_ITEMS - 1:
                             st.session_state.price_tag_focus_idx = idx + 1
+                            # NK_PR_AUTOFOCUS: Queue focus for next row (processed after rerun)
+                            st.session_state._pending_focus_target = idx + 1
                         st.rerun()
             
             # Name input
@@ -427,8 +444,52 @@ class PriceTagPage:
         except Exception:
             pass  # Silently fail - persistence is best-effort
 
-        # Auto-focus indicator - visual only (Streamlit doesn't allow programmatic focus)
-        # The ➤ arrow indicator is sufficient, no JavaScript scrolling needed
+        # Auto-focus indicator - visual (➤ arrow) + JavaScript focus injection
+        # Programmatic focus is implemented via components.v1.html() forum hack
+    
+    def _inject_focus_js(self, target_idx: int):
+        """Inject JavaScript to focus barcode input at target_idx.
+        
+        Uses the forum hack: https://discuss.streamlit.io/t/set-focus-to-a-text-input/34778
+        Each row has 4 text inputs (barcode, name, het, diskon), so barcode is at index target_idx * 4.
+        """
+        try:
+            import streamlit.components.v1 as components
+            # Calculate the input index: 4 inputs per row, barcode is first
+            input_index = target_idx * 4
+            
+            # Single execution with delay - runs after DOM is ready
+            html_content = f"""<div></div><script>
+                setTimeout(function() {{
+                    try {{
+                        var inputs = window.parent.document.querySelectorAll('input[type="text"]');
+                        var target = inputs[{input_index}];
+                        if (target) {{
+                            target.focus();
+                            target.select();
+                            console.log('[AutoFocus] SUCCESS row {target_idx}');
+                        }} else {{
+                            console.log('[AutoFocus] FAIL: no input at {input_index} (found ' + inputs.length + ')');
+                        }}
+                    }} catch(e) {{
+                        console.log('[AutoFocus] ERROR: ' + e.message);
+                    }}
+                }}, 500);
+            </script>"""
+            
+            components.html(html_content, height=0)
+            print(f"[AutoFocus] Injected for row {target_idx}")
+        except Exception as e:
+            print(f"[AutoFocus] Error: {e}")
+    
+    def _process_pending_focus(self):
+        """Process any pending auto-focus request after page render."""
+        focus_target = st.session_state.get('_pending_focus_target')
+        if focus_target is not None:
+            print(f"[AutoFocus] Processing pending focus for row {focus_target}")
+            self._inject_focus_js(focus_target)
+            # Clear it so we don't focus again on next rerun
+            st.session_state._pending_focus_target = None
     
     def _collect_valid_items(self) -> list:
         """Collect and validate items for PDF generation."""
@@ -570,6 +631,9 @@ class PriceTagPage:
         self.render_database_section()
         self.render_items_table()
         self.render_pdf_section()
+        
+        # NK_PR_AUTOFOCUS: Process any pending auto-focus after full page render
+        self._process_pending_focus()
 
 
 def render_price_tag_page():
