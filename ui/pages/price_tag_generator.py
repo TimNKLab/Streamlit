@@ -7,7 +7,7 @@ from logic.price_tag_service import PriceTagService
 from utils.persistence import save_session, restore_session, clear_session, has_saved_session
 
 
-@st.cache_resource(ttl=3600)  # Cache for 1 hour across all rerenders
+@st.cache_resource(ttl=3600, hash_funcs={PriceTagService: lambda x: "v2"})  # Cache for 1 hour, v2 for fuzzy lookup
 def get_price_tag_service() -> PriceTagService:
     """Get or create cached PriceTagService - expensive resource cached globally."""
     print("[CACHE_RESOURCE] Creating PriceTagService (one-time init)...")
@@ -411,36 +411,24 @@ class PriceTagPage:
         except Exception:
             pass  # Silently fail - persistence is best-effort
 
-        # Auto-focus JavaScript for the active row
+        # Auto-focus indicator - visual only (Streamlit doesn't allow programmatic focus)
         focus_idx = st.session_state.price_tag_focus_idx
         if focus_idx < len(st.session_state.price_tag_items):
-            focus_key = st.session_state.price_tag_items[focus_idx]['key_prefix']
+            # Use HTML component to scroll the focused row into view
             st.components.v1.html(f"""
                 <script>
-                    (function() {{
-                        const inputs = window.parent.document.querySelectorAll('input[data-testid="stTextInput"], input[type="text"]');
-                        for (const input of inputs) {{
-                            const label = input.getAttribute('aria-label') || input.placeholder || '';
-                            const key = input.id || input.name || '';
-                            if (key.includes('{focus_key}') || label.toLowerCase().includes('barcode')) {{
-                                // Check if this input is in the focused row by looking at parent elements
-                                let parent = input.parentElement;
-                                let found = false;
-                                for (let i = 0; i < 5 && parent; i++) {{
-                                    if (parent.textContent && parent.textContent.includes('➤ {focus_idx + 1:02d}')) {{
-                                        found = true;
-                                        break;
-                                    }}
-                                    parent = parent.parentElement;
-                                }}
-                                if (found || key.includes('barcode')) {{
-                                    input.focus();
-                                    input.select();
-                                    break;
-                                }}
+                    try {{
+                        // Find the row with the arrow indicator and scroll it into view
+                        const rows = window.parent.document.querySelectorAll('div[data-testid="stVerticalBlock"]');
+                        for (const row of rows) {{
+                            if (row.textContent && row.textContent.includes('➤ {focus_idx + 1:02d}')) {{
+                                row.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
+                                break;
                             }}
                         }}
-                    }})();
+                    }} catch (e) {{
+                        // Silently fail if iframe sandbox blocks access
+                    }}
                 </script>
             """, height=0)
     

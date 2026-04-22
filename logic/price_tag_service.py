@@ -375,21 +375,32 @@ class PriceTagService:
             - {"_status": "AMBIGUOUS"} if multiple SKUs share this suffix
         """
         suffix = suffix.strip()
+        print(f"[FUZZY_LOOKUP] Searching for suffix: {suffix}")
+        
         if len(suffix) != 6 or not suffix.isdigit():
+            print(f"[FUZZY_LOOKUP] Invalid suffix format: {suffix}")
             return None
         
         # Check suffix index
         matching_barcodes = self._suffix_index.get(suffix, [])
+        print(f"[FUZZY_LOOKUP] Found {len(matching_barcodes)} matching barcodes for suffix {suffix}")
         
         if not matching_barcodes:
+            # Fallback: try exact match in case user typed full barcode
+            if suffix in self._products:
+                print(f"[FUZZY_LOOKUP] Fallback exact match found for {suffix}")
+                return self._products.get(suffix)
+            print(f"[FUZZY_LOOKUP] No matches found")
             return None
         
         if len(matching_barcodes) > 1:
             # Ambiguous: multiple SKUs share same last 6 digits
+            print(f"[FUZZY_LOOKUP] Ambiguous: {matching_barcodes}")
             return {"_status": "AMBIGUOUS"}
         
         # Exactly one match - return the product
         barcode = matching_barcodes[0]
+        print(f"[FUZZY_LOOKUP] Single match: {barcode}")
         return self._products.get(barcode)
     
     @property
