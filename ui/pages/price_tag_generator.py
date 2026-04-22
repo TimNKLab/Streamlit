@@ -410,6 +410,39 @@ class PriceTagPage:
             save_session(st.session_state.price_tag_items)
         except Exception:
             pass  # Silently fail - persistence is best-effort
+
+        # Auto-focus JavaScript for the active row
+        focus_idx = st.session_state.price_tag_focus_idx
+        if focus_idx < len(st.session_state.price_tag_items):
+            focus_key = st.session_state.price_tag_items[focus_idx]['key_prefix']
+            st.components.v1.html(f"""
+                <script>
+                    (function() {{
+                        const inputs = window.parent.document.querySelectorAll('input[data-testid="stTextInput"], input[type="text"]');
+                        for (const input of inputs) {{
+                            const label = input.getAttribute('aria-label') || input.placeholder || '';
+                            const key = input.id || input.name || '';
+                            if (key.includes('{focus_key}') || label.toLowerCase().includes('barcode')) {{
+                                // Check if this input is in the focused row by looking at parent elements
+                                let parent = input.parentElement;
+                                let found = false;
+                                for (let i = 0; i < 5 && parent; i++) {{
+                                    if (parent.textContent && parent.textContent.includes('➤ {focus_idx + 1:02d}')) {{
+                                        found = true;
+                                        break;
+                                    }}
+                                    parent = parent.parentElement;
+                                }}
+                                if (found || key.includes('barcode')) {{
+                                    input.focus();
+                                    input.select();
+                                    break;
+                                }}
+                            }}
+                        }}
+                    }})();
+                </script>
+            """, height=0)
     
     def _collect_valid_items(self) -> list:
         """Collect and validate items for PDF generation."""
