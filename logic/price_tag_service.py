@@ -194,10 +194,13 @@ class PriceTagService:
             import time
             start = time.time()
             
-            # Read Parquet into DataFrame then convert to dict
+            # Read Parquet into DataFrame
             df = pd.read_parquet(self.parquet_path)
             
-            # Convert to dict for O(1) lookups
+            # Create barcode_suffix column (last 6 digits)
+            df['barcode_suffix'] = df['barcode'].astype(str).str.strip().str[-6:]
+            
+            # Convert to dict for O(1) lookups - include barcode_suffix
             for _, row in df.iterrows():
                 barcode = str(row.get('barcode', '')).strip()
                 if barcode:
@@ -205,6 +208,7 @@ class PriceTagService:
                         'name': str(row.get('name', '')),
                         'het': self._to_float(row.get('het')),
                         'diskon': self._to_float(row.get('diskon')) if 'diskon' in df.columns else None,
+                        'barcode_suffix': str(row.get('barcode_suffix', '')),
                     }
             
             elapsed = time.time() - start
@@ -220,6 +224,16 @@ class PriceTagService:
                 self._suffix_index[suffix].append(barcode)
             
             print(f"[CACHE] Built suffix index: {len(self._suffix_index)} unique suffixes")
+            
+            # Debug: Check specific suffix
+            debug_suffix = "104041"
+            if debug_suffix in self._suffix_index:
+                print(f"[CACHE] Suffix '{debug_suffix}' maps to: {self._suffix_index[debug_suffix]}")
+            else:
+                print(f"[CACHE] Suffix '{debug_suffix}' NOT FOUND in index")
+                # Show some sample suffixes
+                sample_suffixes = list(self._suffix_index.keys())[:5]
+                print(f"[CACHE] Sample suffixes: {sample_suffixes}")
             
         except Exception as e:
             print(f"[CACHE] Failed to load: {e}")
@@ -320,7 +334,10 @@ class PriceTagService:
                     st.error(f"Missing required columns: {', '.join(missing_cols)}")
                     return TOP_PRODUCTS.copy()
                 
-                # Load products from DataFrame
+                # Create barcode_suffix column (last 6 digits)
+                df['barcode_suffix'] = df['barcode'].astype(str).str.strip().str[-6:]
+                
+                # Load products from DataFrame - include barcode_suffix
                 for _, row in df.iterrows():
                     barcode = str(row.get('barcode', '')).strip()
                     if barcode:
@@ -328,6 +345,7 @@ class PriceTagService:
                             'name': str(row.get('name', '')),
                             'het': self._to_float(row.get('het')),
                             'diskon': self._to_float(row.get('diskon')) if 'diskon' in df.columns else None,
+                            'barcode_suffix': str(row.get('barcode_suffix', '')),
                         }
                 
                 return self._products
@@ -367,41 +385,51 @@ class PriceTagService:
         return None
     
     def lookup_product_by_suffix(self, suffix: str) -> Optional[Dict[str, Any]]:
-        """Lookup product by last 6 digits of barcode.
+        """Lookup product by last 6 digits of barcode using suffix index.
+        
+        Priority:
+            1. Use suffix index (O(1)) to find barcodes with matching suffix
+            2. If exactly one match -> return product
+            3. If multiple matches -> return AMBIGUOUS
+            4. If no matches -> fallback to exact barcode lookup
         
         Returns:
             - Product dict if exactly one match found
-            - None if no matches
+            - None if no matches (after fallback too)
             - {"_status": "AMBIGUOUS"} if multiple SKUs share this suffix
         """
         suffix = suffix.strip()
         print(f"[FUZZY_LOOKUP] Searching for suffix: {suffix}")
         
-        if len(suffix) != 6 or not suffix.isdigit():
-            print(f"[FUZZY_LOOKUP] Invalid suffix format: {suffix}")
+        if len(suffix) != 6:
+            print(f"[FUZZY_LOOKUP] Invalid suffix length: {suffix} (len={len(suffix)})")
             return None
         
-        # Check suffix index
+        # Use suffix index for O(1) lookup
         matching_barcodes = self._suffix_index.get(suffix, [])
-        print(f"[FUZZY_LOOKUP] Found {len(matching_barcodes)} matching barcodes for suffix {suffix}")
+        print(f"[FUZZY_LOOKUP] Suffix index found {len(matching_barcodes)} barcodes for suffix={suffix}")
         
-        if not matching_barcodes:
-            # Fallback: try exact match in case user typed full barcode
-            if suffix in self._products:
-                print(f"[FUZZY_LOOKUP] Fallback exact match found for {suffix}")
-                return self._products.get(suffix)
-            print(f"[FUZZY_LOOKUP] No matches found")
-            return None
+        if len(matching_barcodes) == 1:
+            # Exactly one match - return the product
+            barcode = matching_barcodes[0]
+            print(f"[FUZZY_LOOKUP] Single match: {barcode}")
+            return self._products.get(barcode)
         
         if len(matching_barcodes) > 1:
             # Ambiguous: multiple SKUs share same last 6 digits
             print(f"[FUZZY_LOOKUP] Ambiguous: {matching_barcodes}")
             return {"_status": "AMBIGUOUS"}
         
-        # Exactly one match - return the product
-        barcode = matching_barcodes[0]
-        print(f"[FUZZY_LOOKUP] Single match: {barcode}")
-        return self._products.get(barcode)
+        # No suffix matches - fallback to exact barcode lookup
+        # (in case the 6-digit input IS the full barcode)
+        print(f"[FUZZY_LOOKUP] No suffix match, trying exact barcode lookup...")
+        exact_match = self._products.get(suffix)
+        if exact_match:
+            print(f"[FUZZY_LOOKUP] Found via exact match: {suffix}")
+            return exact_match
+        
+        print(f"[FUZZY_LOOKUP] No matches found")
+        return None
     
     @property
     def product_count(self) -> int:

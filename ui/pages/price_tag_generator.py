@@ -7,7 +7,7 @@ from logic.price_tag_service import PriceTagService
 from utils.persistence import save_session, restore_session, clear_session, has_saved_session
 
 
-@st.cache_resource(ttl=3600, hash_funcs={PriceTagService: lambda x: "v2"})  # Cache for 1 hour, v2 for fuzzy lookup
+@st.cache_resource(ttl=3600, hash_funcs={PriceTagService: lambda x: "v3"})  # Cache for 1 hour, v3 with barcode_suffix column
 def get_price_tag_service() -> PriceTagService:
     """Get or create cached PriceTagService - expensive resource cached globally."""
     print("[CACHE_RESOURCE] Creating PriceTagService (one-time init)...")
@@ -20,7 +20,8 @@ def get_price_tag_service() -> PriceTagService:
 class PriceTagPage:
     """Price Tag Generator page UI component."""
     
-    MAX_ITEMS = 128
+    MAX_ITEMS = 32
+    
     
     def __init__(self):
         # Get cached service (database loaded once per session)
@@ -121,10 +122,10 @@ class PriceTagPage:
         if not barcode:
             return False
 
-        # Allow 6-digit fuzzy lookups OR full barcodes (8+ digits)
-        is_6_digit_lookup = len(barcode) == 6 and barcode.isdigit()
+        # Allow 6-char suffix lookups OR full barcodes (8+ chars)
+        is_6_char_suffix = len(barcode) == 6
         is_full_barcode = len(barcode) >= 8
-        if not (is_6_digit_lookup or is_full_barcode):
+        if not (is_6_char_suffix or is_full_barcode):
             return False
 
         # Prevent duplicate lookups of same barcode
@@ -141,8 +142,8 @@ class PriceTagPage:
         # Mark as looked up
         st.session_state.price_tag_items[idx]['_last_lookup'] = barcode
 
-        # Use fuzzy lookup (expects last 6 digits)
-        if len(barcode) == 6 and barcode.isdigit():
+        # Use fuzzy lookup (expects last 6 chars of barcode)
+        if len(barcode) == 6:
             product = self.service.lookup_product_by_suffix(barcode)
 
             if product and product.get("_status") == "AMBIGUOUS":
@@ -159,6 +160,7 @@ class PriceTagPage:
                 return False
 
             if product:
+                print(f"[UI_LOOKUP] Found product: {product['name'][:20]}")
                 st.session_state.price_tag_items[idx]['barcode'] = barcode  # Keep the 6-digit input
                 st.session_state.price_tag_items[idx]['name'] = product['name']
                 st.session_state.price_tag_items[idx]['het'] = self._format_price_input(product['het'])
@@ -167,6 +169,7 @@ class PriceTagPage:
                 st.session_state.price_tag_items[idx]['in_system'] = True
                 # Regenerate key to force widget refresh with new values
                 st.session_state.price_tag_items[idx]['key_prefix'] = f"row_{idx}_{datetime.now().strftime('%H%M%S%f')}"
+                print(f"[UI_LOOKUP] Set item[{idx}].name = '{product['name'][:20]}'")
                 return True
 
         # Fallback: try exact match for backward compatibility (non-6-digit inputs)
@@ -200,8 +203,8 @@ class PriceTagPage:
             if not barcode or item.get('name'):  # Skip empty or already looked up
                 continue
 
-            # Use fuzzy lookup for 6-digit inputs
-            if len(barcode) == 6 and barcode.isdigit():
+            # Use fuzzy lookup for 6-char suffix inputs
+            if len(barcode) == 6:
                 product = self.service.lookup_product_by_suffix(barcode)
 
                 if product and product.get("_status") == "AMBIGUOUS":
@@ -279,6 +282,11 @@ class PriceTagPage:
         
         # Data rows
         items_to_remove = None
+        
+        # Debug: Check first few items
+        for i, debug_item in enumerate(st.session_state.price_tag_items[:3]):
+            if debug_item['barcode'].strip():
+                print(f"[RENDER] Row {i}: barcode={debug_item['barcode']}, name={debug_item['name'][:15] if debug_item['name'] else 'EMPTY'}")
         
         for idx, item in enumerate(st.session_state.price_tag_items):
             key_prefix = item['key_prefix']
@@ -412,25 +420,7 @@ class PriceTagPage:
             pass  # Silently fail - persistence is best-effort
 
         # Auto-focus indicator - visual only (Streamlit doesn't allow programmatic focus)
-        focus_idx = st.session_state.price_tag_focus_idx
-        if focus_idx < len(st.session_state.price_tag_items):
-            # Use HTML component to scroll the focused row into view
-            st.components.v1.html(f"""
-                <script>
-                    try {{
-                        // Find the row with the arrow indicator and scroll it into view
-                        const rows = window.parent.document.querySelectorAll('div[data-testid="stVerticalBlock"]');
-                        for (const row of rows) {{
-                            if (row.textContent && row.textContent.includes('➤ {focus_idx + 1:02d}')) {{
-                                row.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
-                                break;
-                            }}
-                        }}
-                    }} catch (e) {{
-                        // Silently fail if iframe sandbox blocks access
-                    }}
-                </script>
-            """, height=0)
+        # The ➤ arrow indicator is sufficient, no JavaScript scrolling needed
     
     def _collect_valid_items(self) -> list:
         """Collect and validate items for PDF generation."""
