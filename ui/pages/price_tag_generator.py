@@ -459,10 +459,12 @@ class PriceTagPage:
             input_index = target_idx * 4
             
             # Single execution with delay - runs after DOM is ready
+            # Try window.top first (may work better with CSP), fallback to window.parent
             html_content = f"""<div></div><script>
                 setTimeout(function() {{
                     try {{
-                        var inputs = window.parent.document.querySelectorAll('input[type="text"]');
+                        var doc = window.top.document || window.parent.document;
+                        var inputs = doc.querySelectorAll('input[type="text"]');
                         var target = inputs[{input_index}];
                         if (target) {{
                             target.focus();
