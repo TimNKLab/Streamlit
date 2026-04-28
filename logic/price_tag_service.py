@@ -71,6 +71,7 @@ class PriceTagService:
         self._font_loaded = False
         self._use_duckdb = False
         self._use_memory_cache = use_memory_cache
+        self._last_load_mtime = None  # Track parquet file modification time for auto-reload
         self._load_fonts()
         
         # Auto-convert Excel to Parquet if needed
@@ -181,18 +182,31 @@ class PriceTagService:
     def _load_parquet_to_memory(self):
         """Load Parquet into memory dict for instant O(1) lookups."""
         try:
-            # Skip if already loaded
-            if self._products:
-                print(f"[CACHE] Products already in memory ({len(self._products)} items), skipping reload")
-                return
-            
+            # Check if we need to reload (file changed or first load)
             if not os.path.exists(self.parquet_path):
                 print(f"[CACHE] Parquet not found at {self.parquet_path}")
                 return
             
-            print(f"[CACHE] Loading Parquet into memory from {self.parquet_path}...")
+            current_mtime = os.path.getmtime(self.parquet_path)
+            
+            # Skip reload if file hasn't changed since last load
+            if self._products and self._last_load_mtime == current_mtime:
+                print(f"[CACHE] Products already in memory ({len(self._products)} items), file unchanged")
+                return
+            
+            # File changed or first load - proceed with reload
+            if self._last_load_mtime is not None:
+                print(f"[CACHE] Price data file changed, reloading...")
+            else:
+                print(f"[CACHE] Loading Parquet into memory from {self.parquet_path}...")
             import time
             start = time.time()
+            
+            # Clear existing products if reloading
+            if self._products:
+                print(f"[CACHE] Clearing {len(self._products)} old products before reload")
+                self._products.clear()
+                self._suffix_index.clear()
             
             # Read Parquet into DataFrame
             df = pd.read_parquet(self.parquet_path)
@@ -215,6 +229,10 @@ class PriceTagService:
             print(f"[CACHE] Loaded {len(self._products)} products into memory in {elapsed:.2f}s")
             print(f"[CACHE] Lookup speed: ~0.000001s (1 microsecond)")
             
+            # Store modification time for change detection
+            self._last_load_mtime = current_mtime
+            print(f"[CACHE] File mtime tracked: {current_mtime}")
+            
             # Build suffix index for fuzzy lookup (last 6 digits)
             self._suffix_index.clear()
             for barcode in self._products.keys():
@@ -236,7 +254,29 @@ class PriceTagService:
                 print(f"[CACHE] Sample suffixes: {sample_suffixes}")
             
         except Exception as e:
-            print(f"[CACHE] Failed to load: {e}")
+            print(f"[CACHE] Failed to reload price data: {e}")
+            # Keep old data if reload fails (better than clearing everything)
+            # Next lookup will retry
+            if self._products:
+                print(f"[CACHE] Keeping {len(self._products)} existing products (reload failed)")
+    
+    def _check_and_reload_if_needed(self):
+        """Check if price data file changed and reload if necessary.
+        
+        Call this at the start of public lookup methods to ensure fresh data.
+        """
+        if not self._use_memory_cache:
+            return  # Memory cache disabled, no need to check
+        
+        if not os.path.exists(self.parquet_path):
+            return  # No file to check
+        
+        current_mtime = os.path.getmtime(self.parquet_path)
+        
+        # If file changed since last load, trigger reload
+        if self._last_load_mtime != current_mtime:
+            print(f"[CACHE] Detected price data change ({self._last_load_mtime} -> {current_mtime}), reloading...")
+            self._load_parquet_to_memory()
     
     @staticmethod
     @st.cache_data(ttl=300)  # Cache for 5 minutes
@@ -376,6 +416,9 @@ class PriceTagService:
         """Lookup product by barcode. Priority: Memory cache > TOP_PRODUCTS > DuckDB > None."""
         barcode = barcode.strip()
         
+        # Check for price data updates before lookup
+        self._check_and_reload_if_needed()
+        
         # Priority 1: Memory cache (loaded from Parquet) - FASTEST (~1 microsecond)
         if self._products:
             return self._products.get(barcode)
@@ -407,6 +450,10 @@ class PriceTagService:
             - {"_status": "AMBIGUOUS"} if multiple SKUs share this suffix
         """
         suffix = suffix.strip()
+        
+        # Check for price data updates before lookup
+        self._check_and_reload_if_needed()
+        
         print(f"[FUZZY_LOOKUP] Searching for suffix: {suffix}")
         
         if len(suffix) != 6:
