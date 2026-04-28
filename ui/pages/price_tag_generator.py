@@ -629,6 +629,17 @@ class PriceTagPage:
     def render(self):
         """Render the complete Price Tag Generator page."""
         st.title("Price Tag Generator 😸")
+        
+        # Show database status and refresh button
+        col1, col2 = st.columns([4, 1])
+        with col1:
+            st.caption(f"📦 Database: {self.service.product_count:,} harga sudah terupdate")
+        with col2:
+            if st.button("🔄 Update harga", type="secondary", help="Force reload price data from file"):
+                # Clear the mtime to force reload on next lookup
+                self.service._last_load_mtime = None
+                self.service._load_parquet_to_memory()
+                st.success("Harga sudah terupdate!")
              
         self.render_database_section()
         self.render_items_table()
