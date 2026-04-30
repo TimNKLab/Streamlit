@@ -47,8 +47,8 @@ def render_dashboard_page():
     """Render dashboard page content backed by live Odoo data."""
 
     st.title("Dashboard")
-    st.markdown("### NK Dashboard v0.5.3")
-    st.caption("Sekarang sudah sync offline! 😸")
+    st.markdown("### NK Dashboard v0.5.4")
+    st.caption("Sekarang barcode bisa batch upload! 😸")
 
     now = datetime.now().replace(microsecond=0)
     default_start_dt = (now - timedelta(days=1))
