@@ -117,7 +117,138 @@ class PriceTagPage:
             return str(value)
     
     def render_database_section(self):
-        """Render database upload section."""
+        """Render database upload section with barcode file upload."""
+        with st.expander("📁 Upload File Barcode (Excel/CSV)", expanded=False):
+            st.caption("Upload file dengan kolom 'barcode' untuk generate price tag otomatis")
+            uploaded_file = st.file_uploader(
+                "Pilih file Excel atau CSV",
+                type=['csv', 'xlsx', 'xls'],
+                key="barcode_file_uploader"
+            )
+            
+            if uploaded_file is not None:
+                col1, col2 = st.columns([1, 1])
+                with col1:
+                    if st.button("🚀 Proses & Generate PDF", type="primary", use_container_width=True):
+                        self._process_barcode_file(uploaded_file)
+                with col2:
+                    if st.button("🧹 Clear Items", type="secondary", use_container_width=True):
+                        st.session_state.price_tag_items = []
+                        st.session_state.price_tag_pdf_ready = False
+                        st.session_state.price_tag_pdf_bytes = None
+                        st.rerun()
+
+    def _process_barcode_file(self, uploaded_file):
+        """Process uploaded barcode file and generate PDF."""
+        try:
+            # Read file based on extension
+            file_ext = uploaded_file.name.split('.')[-1].lower()
+            if file_ext in ['xlsx', 'xls']:
+                df = pd.read_excel(uploaded_file)
+            else:
+                df = pd.read_csv(uploaded_file)
+            
+            # Validate required column
+            barcode_col = None
+            for col in df.columns:
+                if col.lower().strip() in ['barcode', 'barcodes', 'kode', 'sku', 'code']:
+                    barcode_col = col
+                    break
+            
+            if barcode_col is None:
+                st.error(f"❌ Kolom 'barcode' tidak ditemukan. Kolom tersedia: {list(df.columns)}")
+                return
+            
+            # Get barcodes (drop empty values)
+            barcodes = df[barcode_col].dropna().astype(str).str.strip()
+            barcodes = barcodes[barcodes != ''].tolist()
+            
+            if not barcodes:
+                st.warning("⚠️ Tidak ada barcode valid di file")
+                return
+            
+            st.info(f"📊 Memproses {len(barcodes)} barcode...")
+            
+            # Clear existing items and add new ones
+            st.session_state.price_tag_items = []
+            found_count = 0
+            not_found_barcodes = []
+            
+            # Process ALL barcodes from file (NO LIMIT - unlimited batch PDF generation)
+            total_barcodes = len(barcodes)
+            st.info(f"📊 Memproses {total_barcodes} barcode...")
+            
+            for idx, barcode in enumerate(barcodes):
+                # Create item with barcode
+                item = {
+                    'barcode': barcode,
+                    'name': '',
+                    'het': '',
+                    'diskon': '',
+                    'status': 'Menunggu...',
+                    'in_system': False,
+                    '_last_lookup': None,
+                    'key_prefix': f"file_row_{idx}_{datetime.now().strftime('%H%M%S%f')}"
+                }
+                
+                # Lookup product - try multiple strategies
+                product = None
+                barcode_clean = barcode.strip()
+                
+                # Strategy 1: Try full barcode exact match first (most reliable)
+                product = self.service.lookup_product(barcode_clean)
+                
+                # Strategy 2: If not found and barcode is 6+ chars, try last 6 digits
+                if not product and len(barcode_clean) >= 6:
+                    suffix = barcode_clean[-6:]
+                    product = self.service.lookup_product_by_suffix(suffix)
+                    if product and product.get("_status") == "AMBIGUOUS":
+                        product = None  # Don't use ambiguous matches
+                
+                # Strategy 3: If barcode is longer than 6, also try checking if the full barcode IS the suffix
+                if not product and len(barcode_clean) > 6:
+                    # Some systems store full barcode, some store last 6 - try both
+                    product = self.service.lookup_product_by_suffix(barcode_clean)
+                    if product and product.get("_status") == "AMBIGUOUS":
+                        product = None
+                
+                if product and product.get("_status") != "AMBIGUOUS":
+                    item['name'] = product.get('name', '')
+                    item['het'] = self._format_price_input(product.get('het'))
+                    item['diskon'] = self._format_price_input(product.get('diskon'))
+                    item['status'] = 'Ditemukan'
+                    item['in_system'] = True
+                    found_count += 1
+                else:
+                    item['status'] = 'Tidak ditemukan'
+                    not_found_barcodes.append(barcode)
+                
+                item['_last_lookup'] = barcode
+                st.session_state.price_tag_items.append(item)
+            
+            # Show results
+            if found_count > 0:
+                st.success(f"✅ {found_count} dari {len(barcodes)} produk ditemukan")
+                if not_found_barcodes:
+                    st.warning(f"⚠️ {len(not_found_barcodes)} barcode tidak ditemukan: {', '.join(not_found_barcodes[:10])}{'...' if len(not_found_barcodes) > 10 else ''}")
+                
+                # Auto-generate PDF
+                with st.spinner("🔄 Membuat PDF..."):
+                    items = self._collect_valid_items()
+                    if items:
+                        pdf_bytes = self.service.generate_pdf(items)
+                        st.session_state.price_tag_pdf_bytes = pdf_bytes
+                        st.session_state.price_tag_pdf_ready = True
+                        st.success(f"✅ PDF berhasil dibuat: {len(items)} item ({len(pdf_bytes):,} bytes)")
+                    else:
+                        st.error("❌ Tidak ada item valid untuk dicetak")
+            else:
+                st.error("❌ Tidak ada produk yang ditemukan di database")
+                
+        except Exception as e:
+            st.error(f"❌ Error memproses file: {str(e)}")
+            import traceback
+            print(f"[ERROR] _process_barcode_file: {traceback.format_exc()}")
 
     def _should_lookup(self, barcode: str, idx: int) -> bool:
         """Check if we should perform lookup (debounce logic)."""
