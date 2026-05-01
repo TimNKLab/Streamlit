@@ -78,7 +78,9 @@ class AuthComponents:
                         st.success(f"✅ {message}")
                         st.rerun()
                     else:
-                        st.error(f"❌ {message}")
+                        st.error(f"❌ Login gagal")
+                        st.code(message)
+                        st.caption("💡 Pastikan: 1) API Key lengkap (40 karakter) 2) Username benar 3) Database name benar")
     
     def render_logout_button(self):
         """Render logout button in sidebar"""
