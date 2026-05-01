@@ -2,8 +2,11 @@
 
 import json
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, asdict, field
+
+import pandas as pd
 
 from odoo.connection import OdooConnectionManager, connection_manager
 from utils.indexeddb_bridge import IndexedDBBridge
@@ -92,15 +95,17 @@ class SyncResult:
 
 
 class IndexedDBPriceSyncService:
-    """Sync prices from Odoo, store baseline in IndexedDB."""
+    """Sync prices from Odoo, store baseline in IndexedDB (with Excel fallback)."""
     
     def __init__(
         self,
         conn_mgr: OdooConnectionManager = None,
         indexeddb: IndexedDBBridge = None,
+        excel_path: str = None,
     ):
         self.conn_mgr = conn_mgr or connection_manager
         self.indexeddb = indexeddb or IndexedDBBridge()
+        self.excel_path = excel_path or str(Path(__file__).parent.parent / "data" / "products.xlsx")
     
     def fetch_odoo_products(self) -> Dict[str, dict]:
         """Fetch active goods from Odoo with pricelist discounts."""
@@ -197,14 +202,52 @@ class IndexedDBPriceSyncService:
             print(f"[SYNC] Error resolving pricelist ID: {e}")
         return None
     
+    def _load_excel_baseline(self) -> Dict[str, dict]:
+        """Load baseline from Excel file (fallback for first-time users)."""
+        try:
+            df = pd.read_excel(self.excel_path, dtype={"barcode": str})
+            df = df.dropna(subset=["barcode"])
+            df["barcode"] = df["barcode"].astype(str).str.strip()
+            
+            # Coerce numeric columns
+            df["het"] = pd.to_numeric(df.get("het", pd.Series(dtype=float)), errors="coerce")
+            df["diskon"] = pd.to_numeric(df.get("diskon", pd.Series(dtype=float)), errors="coerce")
+            
+            products = {}
+            for _, row in df.iterrows():
+                barcode = str(row["barcode"]).strip()
+                products[barcode] = {
+                    "barcode": barcode,
+                    "name": row.get("name", ""),
+                    "het": None if pd.isna(row["het"]) else float(row["het"]),
+                    "diskon": None if pd.isna(row["diskon"]) else float(row["diskon"]),
+                    "last_sync": "1970-01-01T00:00:00",  # Mark as legacy data
+                }
+            
+            print(f"[SYNC] Loaded {len(products)} products from Excel as initial baseline")
+            return products
+        except Exception as e:
+            print(f"[SYNC] Error loading Excel fallback: {e}")
+            return {}
+    
     def detect_changes(self) -> SyncResult:
-        """Compare Odoo prices against IndexedDB baseline."""
+        """Compare Odoo prices against IndexedDB baseline (with Excel fallback)."""
         # Fetch from Odoo
         odoo_products = self.fetch_odoo_products()
         
         # Load baseline from IndexedDB
         local_products_list = self.indexeddb.get_all_products()
-        local_products = {p["barcode"]: p for p in local_products_list}
+        
+        # If IndexedDB is empty, try Excel as fallback (first-time use)
+        if not local_products_list:
+            print("[SYNC] IndexedDB empty, loading Excel as fallback baseline...")
+            local_products = self._load_excel_baseline()
+            # Save Excel data to IndexedDB for next time
+            if local_products:
+                self.indexeddb.upsert_products(list(local_products.values()))
+                print(f"[SYNC] Saved {len(local_products)} Excel products to IndexedDB")
+        else:
+            local_products = {p["barcode"]: p for p in local_products_list}
         
         local_barcodes = set(local_products.keys())
         odoo_barcodes = set(odoo_products.keys())
