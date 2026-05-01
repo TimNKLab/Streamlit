@@ -123,10 +123,9 @@ _COLUMN_CONFIG = {
 # ---------------------------------------------------------------------------
 
 def _render_sync_section(sync_service: IndexedDBPriceSyncService) -> None:
-    """Render the sync controls and trigger sync."""
     st.subheader("Update Harga Sistem Odoo")
-
-    # Get IndexedDB status
+    
+    # Show IndexedDB status
     sync_status = sync_service.get_sync_status()
     if sync_status["is_initialized"]:
         st.success(f"📦 {sync_status['cached_products']:,} produk tersimpan di perangkat ini")
@@ -139,17 +138,19 @@ def _render_sync_section(sync_service: IndexedDBPriceSyncService) -> None:
         if st.button("Update Harga", type="primary", use_container_width=True):
             with st.spinner("Mengambil harga dari Odoo…"):
                 try:
-                    result = sync_service.detect_changes()
+                    # Detect if this is first sync (IndexedDB empty)
+                    is_first_sync = not sync_service.get_sync_status()["is_initialized"]
+                    if is_first_sync:
+                        st.info("📱 Sinkronisasi pertama - semua produk dianggap baru untuk perangkat ini")
+                    
+                    result = sync_service.detect_changes(is_first_sync=is_first_sync)
                     st.session_state.last_sync_result = result
+                    st.session_state.is_first_sync = is_first_sync
                     # Invalidate cached buckets whenever a new sync arrives
                     st.session_state.pop("_change_buckets", None)
                     st.success(f"Selesai! {len(result.changes)} perubahan ditemukan")
                 except Exception as e:
                     st.error(f"Sinkron gagal: {e}")
-                    # Show detailed error in expander
-                    with st.expander("Lihat detail error"):
-                        import traceback
-                        st.code(traceback.format_exc())
 
     with col2:
         if st.button("Lihat Histori", use_container_width=True):
@@ -347,19 +348,6 @@ def render_price_sync_page() -> None:
     )
 
     sync_service = _get_sync_service()
-
-    # Debug: Show configuration
-    with st.expander("🔧 Debug: Configuration", expanded=False):
-        from config.settings import get_odoo_settings
-        settings = get_odoo_settings()
-        st.json({
-            "ODOO_HOST": settings.host,
-            "ODOO_PORT": settings.port,
-            "ODOO_DATABASE": settings.database,
-            "ODOO_USERNAME": settings.username,
-            "ODOO_API_KEY": f"{'*' * len(settings.api_key) if settings.api_key else 'None'}",
-        })
-        st.caption("If you see 'localhost' or 'None', secrets are not configured correctly.")
 
     # Initialise session state keys once
     st.session_state.setdefault("last_sync_result", None)

@@ -10,77 +10,21 @@ class AuthComponents:
         self.auth_manager = auth_manager or AuthManager()
     
     def render_login_page(self):
-        """Render the login page with Odoo credentials."""
-        st.title("🔐 Login Odoo")
+        """Render the login page"""
+        st.title("🔐 Authentication Required")
         
         col1, col2, col3 = st.columns([1, 2, 1])
         
         with col2:
-            st.markdown("### Masukkan kredensial Odoo")
-            
-            # User = Odoo database name
-            database = st.text_input(
-                "Database (User)", 
-                key="database_input",
-                placeholder="REDACTED"
-            )
-            
-            # Optional: Odoo username (defaults to settings)
-            username = st.text_input(
-                "Username Odoo (opsional)", 
-                key="username_input",
-                placeholder="robi@nk.com",
-                help="Kosongkan jika menggunakan default"
-            )
-            
-            # Password = Odoo API key
-            password = st.text_input(
-                "Password (Odoo API Key)", 
-                type="password", 
-                key="password_input",
-                placeholder="Masukkan API Key Odoo Anda"
-            )
-            
-            # Allow demo access for basic features
-            use_demo = st.checkbox("Mode Demo (tanpa Odoo)", value=False)
+            st.markdown("### Masukkan Password untuk melanjutkan")
+            password = st.text_input("Password", type="password", key="password_input")
             
             if st.button("Login", type="primary", use_container_width=True):
-                if use_demo:
-                    # Demo mode - no Odoo access
-                    self.auth_manager.set_authenticated(
-                        st.session_state, 
-                        True, 
-                        odoo_connected=False
-                    )
-                    st.success("✅ Login Demo berhasil! (Tanpa akses Odoo)")
+                if self.auth_manager.verify_password(password):
+                    self.auth_manager.set_authenticated(st.session_state, True)
                     st.rerun()
                 else:
-                    # Debug: show what's being submitted
-                    st.write(f"Debug: DB='{database}', User='{username}', Key length={len(password) if password else 0}")
-                    
-                    # Try Odoo authentication
-                    with st.spinner("Menghubungkan ke Odoo..."):
-                        success, message = self.auth_manager.authenticate_odoo(
-                            database=database,
-                            api_key=password,
-                            username=username if username else None
-                        )
-                    
-                    if success:
-                        self.auth_manager.set_authenticated(
-                            st.session_state, 
-                            True, 
-                            odoo_connected=True,
-                            odoo_database=database,
-                            odoo_api_key=password,
-                            odoo_username=username if username else None
-                        )
-                        st.success(f"✅ {message}")
-                        st.rerun()
-                    else:
-                        st.error(f"❌ Login gagal")
-                        st.code(message)
-                        st.caption("💡 Pastikan: 1) API Key lengkap (40 karakter) 2) Username benar 3) Database name benar")
+                    st.error("❌ Password salah. Silakan coba lagi.")
     
     def render_logout_button(self):
         """Render logout button in sidebar"""
