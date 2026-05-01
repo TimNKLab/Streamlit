@@ -635,17 +635,21 @@ class PriceTagPage:
             
             name = item['name'].strip()
             
-            # Parse prices
+            # Parse prices - handle both string and numeric types
             try:
-                het_val = item['het'].strip()
+                het_val = item['het']
+                if isinstance(het_val, str):
+                    het_val = het_val.strip()
                 het = int(float(het_val)) if het_val else None
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, AttributeError):
                 het = None
             
             try:
-                diskon_val = item['diskon'].strip()
+                diskon_val = item['diskon']
+                if isinstance(diskon_val, str):
+                    diskon_val = diskon_val.strip()
                 diskon = int(float(diskon_val)) if diskon_val else None
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, AttributeError):
                 diskon = None
             
             # Debug logging
