@@ -4,8 +4,11 @@ import os
 import streamlit as st
 
 # Inject st.secrets into os.environ for cloud deployment
-# This allows settings.py to work unchanged with st.secrets
-if hasattr(st, 'secrets') and st.secrets:
+# Only if .env file doesn't exist (prioritize .env for local dev)
+from pathlib import Path
+env_path = Path(__file__).parent / ".env"
+
+if not env_path.exists() and hasattr(st, 'secrets') and st.secrets:
     for section, values in st.secrets.items():
         if isinstance(values, dict):
             for key, value in values.items():
