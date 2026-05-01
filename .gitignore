@@ -1,6 +1,5 @@
 /TES TARIK PENJUALAN.xlsx
 .env
-# Streamlit secrets (contains actual API keys)
 .streamlit/secrets.toml
 # Downloaded fonts
 fonts/*.ttf
