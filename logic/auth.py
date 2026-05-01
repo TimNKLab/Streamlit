@@ -26,28 +26,39 @@ class AuthManager:
         
         try:
             # Build connection and test login
+            print(f"[AUTH] Connecting to {self.odoo_host}:{self.odoo_port} ({self.protocol})...")
+            print(f"[AUTH] DB={database}, User={username}")
+            
             client = odoorpc.ODOO(
                 self.odoo_host,
                 protocol=self.protocol,
                 port=self.odoo_port,
             )
+            print("[AUTH] ODOO client created, attempting login...")
+            
             uid = client.login(database, username, api_key)
             
             if uid:
+                print(f"[AUTH] Login successful, uid={uid}")
                 return True, f"Terhubung ke Odoo (User ID: {uid})"
             else:
+                print("[AUTH] Login returned None")
                 return False, "Login gagal - periksa database dan API key"
                 
-        except odoorpc.error.RPCError as e:
-            error_msg = str(e).lower()
-            if "database" in error_msg:
-                return False, "Database tidak ditemukan"
-            elif "credentials" in error_msg or "password" in error_msg or "login" in error_msg:
-                return False, "API Key salah"
-            else:
-                return False, f"Error Odoo: {str(e)}"
         except Exception as e:
-            return False, f"Koneksi gagal: {str(e)}"
+            print(f"[AUTH] Exception: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            error_msg = str(e).lower()
+            if "database" in error_msg and ("not found" in error_msg or "doesn't exist" in error_msg):
+                return False, "Database tidak ditemukan"
+            elif any(x in error_msg for x in ["credentials", "password", "login", "authentication", "access denied"]):
+                return False, "API Key atau username salah"
+            elif "connection" in error_msg or "timeout" in error_msg:
+                return False, "Tidak dapat terhubung ke server Odoo"
+            else:
+                return False, f"Error: {str(e)[:100]}"
     
     def verify_password(self, input_password):
         """Legacy - kept for compatibility."""
