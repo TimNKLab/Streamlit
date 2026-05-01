@@ -55,6 +55,9 @@ class AuthComponents:
                     st.success("✅ Login Demo berhasil! (Tanpa akses Odoo)")
                     st.rerun()
                 else:
+                    # Debug: show what's being submitted
+                    st.write(f"Debug: DB='{database}', User='{username}', Key length={len(password) if password else 0}")
+                    
                     # Try Odoo authentication
                     with st.spinner("Menghubungkan ke Odoo..."):
                         success, message = self.auth_manager.authenticate_odoo(
