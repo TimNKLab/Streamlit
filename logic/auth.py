@@ -5,7 +5,7 @@ import odoorpc
 class AuthManager:
     """Handles authentication logic via Odoo connection."""
     
-    def __init__(self, odoo_host="newkhatulistiwa.odoo.com", odoo_port=443, protocol="jsonrpc+ssl", default_username="robi@nk.com"):
+    def __init__(self, odoo_host="newkhatulistiwa.odoo.com", odoo_port=8069, protocol="jsonrpc", default_username="robi@nk.com"):
         self.odoo_host = odoo_host
         self.odoo_port = odoo_port
         self.protocol = protocol
@@ -42,8 +42,8 @@ class AuthManager:
                 print(f"[AUTH] Login successful, uid={uid}")
                 return True, f"Terhubung ke Odoo (User ID: {uid})"
             else:
-                print("[AUTH] Login returned None")
-                return False, "Login gagal - periksa database dan API key"
+                print("[AUTH] Login returned None - invalid credentials")
+                return False, "Login gagal: API Key atau username tidak valid. Pastikan API Key aktif di Odoo (Settings > My Account > API Keys)"
                 
         except Exception as e:
             import traceback
