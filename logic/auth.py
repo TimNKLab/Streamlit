@@ -46,19 +46,21 @@ class AuthManager:
                 return False, "Login gagal - periksa database dan API key"
                 
         except Exception as e:
-            print(f"[AUTH] Exception: {type(e).__name__}: {e}")
             import traceback
-            traceback.print_exc()
+            tb_str = traceback.format_exc()
+            print(f"[AUTH] Exception: {type(e).__name__}: {e}")
+            print(tb_str)
             
             error_msg = str(e).lower()
             if "database" in error_msg and ("not found" in error_msg or "doesn't exist" in error_msg):
-                return False, "Database tidak ditemukan"
-            elif any(x in error_msg for x in ["credentials", "password", "login", "authentication", "access denied"]):
-                return False, "API Key atau username salah"
-            elif "connection" in error_msg or "timeout" in error_msg:
-                return False, "Tidak dapat terhubung ke server Odoo"
+                return False, f"Database tidak ditemukan: {str(e)[:80]}"
+            elif any(x in error_msg for x in ["credentials", "password", "login", "authentication", "access denied", "401", "403"]):
+                return False, f"API Key atau username salah: {str(e)[:80]}"
+            elif "connection" in error_msg or "timeout" in error_msg or "refused" in error_msg:
+                return False, f"Tidak dapat terhubung: {str(e)[:80]}"
             else:
-                return False, f"Error: {str(e)[:100]}"
+                # Return full error for debugging
+                return False, f"{type(e).__name__}: {str(e)[:150]}"
     
     def verify_password(self, input_password):
         """Legacy - kept for compatibility."""
