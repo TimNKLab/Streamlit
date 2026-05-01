@@ -123,9 +123,10 @@ _COLUMN_CONFIG = {
 # ---------------------------------------------------------------------------
 
 def _render_sync_section(sync_service: IndexedDBPriceSyncService) -> None:
+    """Render the sync controls and trigger sync."""
     st.subheader("Update Harga Sistem Odoo")
-    
-    # Show IndexedDB status
+
+    # Get IndexedDB status
     sync_status = sync_service.get_sync_status()
     if sync_status["is_initialized"]:
         st.success(f"📦 {sync_status['cached_products']:,} produk tersimpan di perangkat ini")
@@ -145,6 +146,10 @@ def _render_sync_section(sync_service: IndexedDBPriceSyncService) -> None:
                     st.success(f"Selesai! {len(result.changes)} perubahan ditemukan")
                 except Exception as e:
                     st.error(f"Sinkron gagal: {e}")
+                    # Show detailed error in expander
+                    with st.expander("Lihat detail error"):
+                        import traceback
+                        st.code(traceback.format_exc())
 
     with col2:
         if st.button("Lihat Histori", use_container_width=True):
