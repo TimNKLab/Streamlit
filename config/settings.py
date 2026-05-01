@@ -17,10 +17,15 @@ def _get_env_or_secret(key: str, default: str = "") -> str:
     try:
         import streamlit as st
         if key in st.secrets:
+            print(f"[CONFIG] Loading {key} from Streamlit secrets")
             return st.secrets[key]
-    except:
-        pass  # Streamlit not available or no secrets
-    return os.getenv(key, default)
+    except Exception as e:
+        print(f"[CONFIG] Error checking Streamlit secrets: {e}")
+    
+    env_val = os.getenv(key, default)
+    if env_val and env_val != default:
+        print(f"[CONFIG] Loading {key} from environment variable")
+    return env_val
 
 
 @dataclass(frozen=True)
@@ -45,5 +50,6 @@ class OdooSettings:
 @lru_cache(maxsize=1)
 def get_odoo_settings() -> OdooSettings:
     """Return cached settings instance to avoid repeated env parsing."""
-
-    return OdooSettings()
+    settings = OdooSettings()
+    print(f"[CONFIG] Odoo Settings loaded: host={settings.host}, db={settings.database}, user={settings.username}, api_key={'*' * len(settings.api_key) if settings.api_key else 'None'}")
+    return settings
