@@ -138,14 +138,8 @@ def _render_sync_section(sync_service: IndexedDBPriceSyncService) -> None:
         if st.button("Update Harga", type="primary", use_container_width=True):
             with st.spinner("Mengambil harga dari Odoo…"):
                 try:
-                    # Detect if this is first sync (IndexedDB empty)
-                    is_first_sync = not sync_service.get_sync_status()["is_initialized"]
-                    if is_first_sync:
-                        st.info("📱 Sinkronisasi pertama - semua produk dianggap baru untuk perangkat ini")
-                    
-                    result = sync_service.detect_changes(is_first_sync=is_first_sync)
+                    result = sync_service.detect_changes()
                     st.session_state.last_sync_result = result
-                    st.session_state.is_first_sync = is_first_sync
                     # Invalidate cached buckets whenever a new sync arrives
                     st.session_state.pop("_change_buckets", None)
                     st.success(f"Selesai! {len(result.changes)} perubahan ditemukan")
