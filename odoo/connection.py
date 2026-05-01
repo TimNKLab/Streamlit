@@ -58,9 +58,16 @@ class OdooConnectionManager:
             raise OdooIntegrationError("Missing Odoo API key. Set ODOO_API_KEY in the environment.")
 
         try:
+            if self.settings.port == 443:
+                protocol = "jsonrpc+ssl"
+            elif self.settings.port == 80:
+                protocol = "jsonrpc"
+            else:
+                protocol = self.settings.protocol if self.settings.protocol in ("jsonrpc", "jsonrpc+ssl") else "jsonrpc"
+
             client = odoorpc.ODOO(
                 self.settings.host,
-                protocol=self.settings.protocol,
+                protocol=protocol,
                 port=self.settings.port,
                 version=self.settings.version,
             )
@@ -208,8 +215,11 @@ class OdooConnectionManager:
         return self._execute(_worker)
 
     def ping(self) -> bool:
+        """Check if Odoo is reachable by checking the version."""
         try:
-            self._execute(lambda client: client.db.list())
+            # client.version is a property that works without admin rights
+            # db.list() is admin-only on Odoo Online and returns "Access Denied"
+            self._execute(lambda client: client.version)
             return True
         except OdooIntegrationError:
             return False
