@@ -343,19 +343,6 @@ def render_price_sync_page() -> None:
 
     sync_service = _get_sync_service()
 
-    # Debug: Show configuration
-    with st.expander("🔧 Debug: Configuration", expanded=False):
-        from config.settings import get_odoo_settings
-        settings = get_odoo_settings()
-        st.json({
-            "ODOO_HOST": settings.host,
-            "ODOO_PORT": settings.port,
-            "ODOO_DATABASE": settings.database,
-            "ODOO_USERNAME": settings.username,
-            "ODOO_API_KEY": f"{'*' * len(settings.api_key) if settings.api_key else 'None'}",
-        })
-        st.caption("If you see 'localhost' or 'None', secrets are not configured correctly.")
-
     # Initialise session state keys once
     st.session_state.setdefault("last_sync_result", None)
     st.session_state.setdefault("selected_changes", [])
