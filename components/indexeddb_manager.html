@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <script>
+        // IndexedDB configuration
+        const DB_NAME = 'price_sync_db';
+        const DB_VERSION = 1;
+        const STORE_PRODUCTS = 'products';
+        const STORE_HISTORY = 'sync_history';
+
+        let db = null;
+
+        // Initialize IndexedDB
+        async function initDB() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(DB_NAME, DB_VERSION);
+                
+                request.onerror = () => reject(request.error);
+                request.onsuccess = () => {
+                    db = request.result;
+                    resolve(db);
+                };
+                
+                request.onupgradeneeded = (event) => {
+                    const db = event.target.result;
+                    
+                    // Products store
+                    if (!db.objectStoreNames.contains(STORE_PRODUCTS)) {
+                        const store = db.createObjectStore(STORE_PRODUCTS, { keyPath: 'barcode' });
+                        store.createIndex('last_sync', 'last_sync', { unique: false });
+                    }
+                    
+                    // Sync history store
+                    if (!db.objectStoreNames.contains(STORE_HISTORY)) {
+                        const store = db.createObjectStore(STORE_HISTORY, { 
+                            keyPath: 'id', 
+                            autoIncrement: true 
+                        });
+                        store.createIndex('timestamp', 'timestamp', { unique: false });
+                    }
+                };
+            });
+        }
+
+        // Get all products
+        async function getAllProducts() {
+            if (!db) await initDB();
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction([STORE_PRODUCTS], 'readonly');
+                const store = transaction.objectStore(STORE_PRODUCTS);
+                const request = store.getAll();
+                
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        // Get single product by barcode
+        async function getProduct(barcode) {
+            if (!db) await initDB();
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction([STORE_PRODUCTS], 'readonly');
+                const store = transaction.objectStore(STORE_PRODUCTS);
+                const request = store.get(barcode);
+                
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        // Upsert products (batch)
+        async function upsertProducts(products) {
+            if (!db) await initDB();
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction([STORE_PRODUCTS], 'readwrite');
+                const store = transaction.objectStore(STORE_PRODUCTS);
+                
+                let count = 0;
+                products.forEach(product => {
+                    const request = store.put(product);
+                    request.onsuccess = () => { count++; };
+                });
+                
+                transaction.oncomplete = () => resolve({ success: true, count });
+                transaction.onerror = () => reject(transaction.error);
+            });
+        }
+
+        // Get product count
+        async function getProductCount() {
+            if (!db) await initDB();
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction([STORE_PRODUCTS], 'readonly');
+                const store = transaction.objectStore(STORE_PRODUCTS);
+                const request = store.count();
+                
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        // Clear all products
+        async function clearAllProducts() {
+            if (!db) await initDB();
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction([STORE_PRODUCTS], 'readwrite');
+                const store = transaction.objectStore(STORE_PRODUCTS);
+                const request = store.clear();
+                
+                request.onsuccess = () => resolve({ success: true });
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        // Add sync history record
+        async function addSyncHistory(record) {
+            if (!db) await initDB();
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction([STORE_HISTORY], 'readwrite');
+                const store = transaction.objectStore(STORE_HISTORY);
+                const request = store.add(record);
+                
+                request.onsuccess = () => resolve({ success: true, id: request.result });
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        // Get sync history
+        async function getSyncHistory(limit = 10) {
+            if (!db) await initDB();
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction([STORE_HISTORY], 'readonly');
+                const store = transaction.objectStore(STORE_HISTORY);
+                const index = store.index('timestamp');
+                const request = index.openCursor(null, 'prev');
+                
+                const results = [];
+                request.onsuccess = (event) => {
+                    const cursor = event.target.result;
+                    if (cursor && results.length < limit) {
+                        results.push(cursor.value);
+                        cursor.continue();
+                    } else {
+                        resolve(results);
+                    }
+                };
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        // Listen for messages from Python
+        window.addEventListener('message', async (event) => {
+            const { action, data, id } = event.data;
+            let result;
+            
+            try {
+                switch (action) {
+                    case 'get_all_products':
+                        result = await getAllProducts();
+                        break;
+                    case 'get_product':
+                        result = await getProduct(data.barcode);
+                        break;
+                    case 'upsert_products':
+                        result = await upsertProducts(data.products);
+                        break;
+                    case 'get_count':
+                        result = { count: await getProductCount() };
+                        break;
+                    case 'clear_all':
+                        result = await clearAllProducts();
+                        break;
+                    case 'add_sync_history':
+                        result = await addSyncHistory(data.record);
+                        break;
+                    case 'get_sync_history':
+                        result = await getSyncHistory(data.limit);
+                        break;
+                    default:
+                        result = { error: 'Unknown action: ' + action };
+                }
+            } catch (error) {
+                result = { error: error.message };
+            }
+            
+            // Send result back to parent
+            window.parent.postMessage({ id, result }, '*');
+        });
+
+        // Signal ready
+        window.parent.postMessage({ type: 'indexeddb_ready' }, '*');
+        
+        // Also set a flag that can be checked
+        window.indexedDBManagerReady = true;
+    </script>
+</head>
+<body>
+    <div id="status">IndexedDB Manager Ready</div>
+</body>
+</html>
