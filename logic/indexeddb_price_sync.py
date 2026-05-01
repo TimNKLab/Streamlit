@@ -230,39 +230,26 @@ class IndexedDBPriceSyncService:
             print(f"[SYNC] Error loading Excel fallback: {e}")
             return {}
     
-    def detect_changes(self, is_first_sync: bool = False) -> SyncResult:
-        """Compare Odoo prices against IndexedDB baseline (with Excel fallback).
-        
-        Args:
-            is_first_sync: If True, treats all products as "new" to this device,
-                          regardless of Excel data. Use for first-time device setup.
-        """
+    def detect_changes(self) -> SyncResult:
+        """Compare Odoo prices against IndexedDB baseline (with Excel fallback)."""
         # Fetch from Odoo
         odoo_products = self.fetch_odoo_products()
         
         # Load baseline from IndexedDB
         local_products_list = self.indexeddb.get_all_products()
-        local_products: Dict[str, dict] = {}
         
-        # If IndexedDB is empty, try Excel as fallback
+        # If IndexedDB is empty, try Excel as fallback (first-time use)
         if not local_products_list:
-            print("[SYNC] IndexedDB empty, checking Excel fallback...")
-            excel_products = self._load_excel_baseline()
-            
-            if is_first_sync:
-                # First sync on this device: treat ALL Odoo products as "new"
-                # Don't use Excel as baseline, don't save to IndexedDB yet
-                print("[SYNC] First sync - treating all Odoo products as new to this device")
-                local_barcodes = set()  # Empty = all products are "new"
-            else:
-                # Subsequent syncs: use Excel for comparison
-                print(f"[SYNC] Using Excel as baseline ({len(excel_products)} products)")
-                local_products = excel_products
-                local_barcodes = set(local_products.keys())
+            print("[SYNC] IndexedDB empty, loading Excel as fallback baseline...")
+            local_products = self._load_excel_baseline()
+            # Save Excel data to IndexedDB for next time
+            if local_products:
+                self.indexeddb.upsert_products(list(local_products.values()))
+                print(f"[SYNC] Saved {len(local_products)} Excel products to IndexedDB")
         else:
             local_products = {p["barcode"]: p for p in local_products_list}
-            local_barcodes = set(local_products.keys())
         
+        local_barcodes = set(local_products.keys())
         odoo_barcodes = set(odoo_products.keys())
         
         changes: List[PriceChange] = []
