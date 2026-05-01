@@ -1,5 +1,6 @@
 /TES TARIK PENJUALAN.xlsx
 .env
+.streamlit/secrets.toml
 # Downloaded fonts
 fonts/*.ttf
 # Session persistence data

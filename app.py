@@ -1,6 +1,17 @@
 """Main Streamlit application with separated UI and logic"""
 
+import os
 import streamlit as st
+
+# Inject st.secrets into os.environ for cloud deployment
+# This allows settings.py to work unchanged with st.secrets
+if hasattr(st, 'secrets') and st.secrets:
+    for section, values in st.secrets.items():
+        if isinstance(values, dict):
+            for key, value in values.items():
+                env_key = f"{section.upper()}_{key.upper()}"
+                os.environ[env_key] = str(value)
+
 from logic.auth import AuthManager
 from ui.components.auth_components import AuthComponents
 from ui.pages.dashboard import render_dashboard_page
