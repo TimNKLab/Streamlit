@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from functools import lru_cache
-
 from dotenv import load_dotenv
 
 # Load environment variables from .env when available (no-op in production if absent)
@@ -13,14 +11,29 @@ load_dotenv()
 
 
 def _get_env_or_secret(key: str, default: str = "") -> str:
-    """Get value from Streamlit secrets first, then environment variables."""
+    """Get value from session state (user login), then Streamlit secrets, then environment variables."""
     try:
         import streamlit as st
+        
+        # Check session state first (user-entered credentials at login)
+        session_key_map = {
+            "ODOO_DATABASE": "odoo_database",
+            "ODOO_API_KEY": "odoo_api_key",
+            "ODOO_USERNAME": "odoo_username",
+        }
+        session_key = session_key_map.get(key)
+        if session_key and session_key in st.session_state:
+            val = st.session_state[session_key]
+            if val:
+                print(f"[CONFIG] Loading {key} from session state (user login)")
+                return val
+        
+        # Then check Streamlit secrets
         if key in st.secrets:
             print(f"[CONFIG] Loading {key} from Streamlit secrets")
             return st.secrets[key]
     except Exception as e:
-        print(f"[CONFIG] Error checking Streamlit secrets: {e}")
+        print(f"[CONFIG] Error checking session/secrets: {e}")
     
     env_val = os.getenv(key, default)
     if env_val and env_val != default:
@@ -47,9 +60,9 @@ class OdooSettings:
     pool_connection_timeout: int = int(_get_env_or_secret("ODOO_POOL_CONNECTION_TIMEOUT", "30"))
 
 
-@lru_cache(maxsize=1)
 def get_odoo_settings() -> OdooSettings:
-    """Return cached settings instance to avoid repeated env parsing."""
+    """Return settings instance reading from session state, secrets, or env vars."""
     settings = OdooSettings()
-    print(f"[CONFIG] Odoo Settings loaded: host={settings.host}, db={settings.database}, user={settings.username}, api_key={'*' * len(settings.api_key) if settings.api_key else 'None'}")
+    masked_key = '*' * len(settings.api_key) if settings.api_key else 'None'
+    print(f"[CONFIG] Odoo Settings: host={settings.host}, db={settings.database}, user={settings.username}, api_key={masked_key}")
     return settings

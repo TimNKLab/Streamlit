@@ -38,6 +38,13 @@ def main():
     # Render main application
     st.sidebar.title("Navigation")
     
+    # Show Odoo connection status
+    if auth_manager.is_odoo_connected(st.session_state):
+        st.sidebar.success("🟢 Terhubung ke Odoo")
+        st.sidebar.caption(f"DB: {st.session_state.get('odoo_database', 'N/A')}")
+    else:
+        st.sidebar.warning("🟡 Mode Demo (tanpa Odoo)")
+    
     # Render logout button
     auth_components.render_logout_button()
     
@@ -48,8 +55,11 @@ def main():
         else:
             st.session_state.active_tab = restore_active_tab()
     
-    # Tab definitions
-    tabs = {
+    # Check if user has Odoo connection
+    has_odoo = auth_manager.is_odoo_connected(st.session_state)
+    
+    # Tab definitions - filter based on Odoo connection
+    all_tabs = {
         "dashboard": ("📊 Dashboard", render_dashboard_page),
         "ba_sales": ("💰 BA Sales Report", render_ba_sales_report_page),
         "stock_control": ("📦 Stock Control", render_stock_control_page),
@@ -58,6 +68,17 @@ def main():
         "price_sync": ("🔄 Price Sync", render_price_sync_page),
         "price_tag": ("🏷️ Price Tag", render_price_tag_page),
     }
+    
+    # Odoo-dependent tabs (require active connection)
+    odoo_tabs = {"price_sync", "ba_sales", "stock_control", "dsi_report", "stock_card"}
+    
+    # Filter tabs based on connection
+    tabs = {k: v for k, v in all_tabs.items() if k not in odoo_tabs or has_odoo}
+    
+    # If current tab is Odoo-only but user lost connection, switch to dashboard
+    if st.session_state.active_tab in odoo_tabs and not has_odoo:
+        st.session_state.active_tab = "dashboard"
+        save_active_tab("dashboard")
     
     # Render tab buttons
     tab_cols = st.columns(len(tabs))
