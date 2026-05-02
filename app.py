@@ -64,13 +64,13 @@ def main():
     
     # Tab definitions
     tabs = {
-        "dashboard": ("📊 Dashboard", render_dashboard_page),
-        "ba_sales": ("💰 BA Sales Report", render_ba_sales_report_page),
-        "stock_control": ("📦 Stock Control", render_stock_control_page),
-        "dsi_report": ("📋 DSI Report", render_dsi_report_page),
-        "stock_card": ("📇 Stock Card", render_stock_card_page),
-        "price_sync": ("🔄 Price Sync", render_price_sync_page),
-        "price_tag": ("🏷️ Price Tag", render_price_tag_page),
+        "dashboard": ("Dashboard", render_dashboard_page),
+        "ba_sales": ("BA Sales Report", render_ba_sales_report_page),
+        "stock_control": ("Stock Control", render_stock_control_page),
+        "dsi_report": ("DSI Report", render_dsi_report_page),
+        "stock_card": ("Stock Card", render_stock_card_page),
+        "price_sync": ("Price Sync", render_price_sync_page),
+        "price_tag": ("Price Tag", render_price_tag_page),
     }
     
     # Render tab buttons

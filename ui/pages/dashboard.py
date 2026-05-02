@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 import streamlit as st
 import pandas as pd
@@ -15,6 +16,9 @@ from odoo.services import (
     get_recent_pos_orders,
     get_sales_metrics,
 )
+
+# Define WIB timezone (UTC+7) at module level
+WIB = ZoneInfo("Asia/Jakarta")
 
 
 @st.cache_data(ttl=300)
@@ -43,14 +47,45 @@ def _cached_recent_pos_orders(
     return get_recent_pos_orders(limit=limit, start_dt=start_dt, end_dt=end_dt)
 
 
+def format_utc_to_wib(date_str):
+    """Convert UTC datetime string to WIB timezone for display."""
+    if not date_str:
+        return date_str
+    
+    try:
+        # Simple approach: parse datetime and add exactly 7 hours
+        # Handle different Odoo date formats
+        if 'T' in date_str:
+            # ISO format: "2024-05-02T03:18:45Z" or "2024-05-02T03:18:45"
+            clean_str = date_str.replace('Z', '').split('.')[0].split('+')[0]
+            utc_dt = datetime.fromisoformat(clean_str)
+        else:
+            # Standard format: "2024-05-02 03:18:45"
+            clean_str = date_str.split('.')[0]
+            utc_dt = datetime.strptime(clean_str, "%Y-%m-%d %H:%M:%S")
+        
+        # Add exactly 7 hours for WIB (UTC+7)
+        wib_dt = utc_dt + timedelta(hours=7)
+        
+        # Handle day overflow
+        if wib_dt.day != utc_dt.day:
+            # If adding 7 hours crosses to next day, adjust accordingly
+            pass
+        
+        return wib_dt.strftime("%Y-%m-%d %H:%M:%S")
+    except (ValueError, AttributeError):
+        # If all else fails, return original string
+        return date_str
+
+
 def render_dashboard_page():
     """Render dashboard page content backed by live Odoo data."""
 
     st.title("Dashboard")
-    st.markdown("### NK Dashboard v0.5.4")
-    st.caption("Sekarang barcode bisa batch upload! 😸")
+    st.markdown("### NK Dashboard v0.6.0")
+    st.caption("Sudah nyambung ke Odoo DB! 😸")
 
-    now = datetime.now().replace(microsecond=0)
+    now = datetime.now(WIB).replace(microsecond=0)
     default_start_dt = (now - timedelta(days=1))
 
     if "pos_filter_state" not in st.session_state:
@@ -112,8 +147,8 @@ def render_dashboard_page():
             _cached_recent_pos_orders.clear()
             st.toast("Dashboard data refreshed", icon="✅")
 
-    pos_start_dt = datetime.combine(filter_state["start_date"], filter_state["start_time"])
-    pos_end_dt = datetime.combine(filter_state["end_date"], filter_state["end_time"])
+    pos_start_dt = datetime.combine(filter_state["start_date"], filter_state["start_time"], tzinfo=WIB)
+    pos_end_dt = datetime.combine(filter_state["end_date"], filter_state["end_time"], tzinfo=WIB)
 
     try:
         metrics = _cached_sales_metrics(pos_start_dt=pos_start_dt, pos_end_dt=pos_end_dt)
@@ -121,19 +156,17 @@ def render_dashboard_page():
         st.error(f"Gagal sinkron ke database: {exc}")
         metrics = None
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2 = st.columns(2)
 
     if metrics:
         with col1:
             st.metric("POS Orders (range)", f"{metrics.pos_order_count:,}")
         with col2:
-            st.metric("POS Revenue", f"Rp {metrics.pos_total_amount:,.0f}")
-        with col3:
             st.metric("Confirmed Sales Orders", f"{metrics.total_confirmed_orders:,}")
-        with col4:
-            st.metric("Sales Revenue", f"Rp {metrics.total_confirmed_amount:,.0f}")
+
+
     else:
-        for col in (col1, col2, col3, col4):
+        for col in (col1, col2):
             with col:
                 st.metric("--", "---")
 
@@ -163,9 +196,8 @@ def render_dashboard_page():
             {
                 "Nomor Order": row.get("name"),
                 "Nama Pelanggan": (row.get("partner_id") or [None, "Tidak diketahui"])[1],
-                "Nilai": row.get("amount_total", 0.0),
                 "Status Transaksi": row.get("state"),
-                "Tanggal": row.get("date_order"),
+                "Tanggal": format_utc_to_wib(row.get("date_order")),
             }
             for row in recent_orders
         ]
@@ -180,7 +212,6 @@ def render_dashboard_page():
         )
 
         # Configure columns for better display
-        gb.configure_column("Nilai", type=["numericColumn", "rightAligned"], precision=0)
         gb.configure_selection("disabled")
         
         grid_options = gb.build()
