@@ -351,6 +351,41 @@ class IndexedDBPriceSyncService:
             "is_initialized": count > 0,
         }
     
+    def get_sync_history(self, limit: int = 5) -> List[Dict[str, Any]]:
+        """Get recent sync history from session state or return empty list."""
+        import streamlit as st
+        
+        # Get history from session state if available
+        history = st.session_state.get("price_sync_history", [])
+        
+        if not history:
+            return []
+        
+        # Return most recent entries up to limit
+        return history[-limit:]
+    
+    def add_sync_to_history(self, result: SyncResult) -> None:
+        """Add a sync result to the history."""
+        import streamlit as st
+        from datetime import datetime
+        
+        if "price_sync_history" not in st.session_state:
+            st.session_state.price_sync_history = []
+        
+        history_entry = {
+            "timestamp": datetime.now().isoformat(),
+            "total_changes": len(result.changes),
+            "total_odoo_products": result.total_odoo_products,
+            "total_local_products": getattr(result, 'total_local_products', 0),
+            "change_summary": result.summary,
+        }
+        
+        st.session_state.price_sync_history.append(history_entry)
+        
+        # Keep only last 20 entries to prevent memory bloat
+        if len(st.session_state.price_sync_history) > 20:
+            st.session_state.price_sync_history = st.session_state.price_sync_history[-20:]
+    
     def export_changes_to_excel(self, result: SyncResult, output_path: str) -> None:
         """Export changes to Excel for review."""
         import pandas as pd
