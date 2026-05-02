@@ -146,6 +146,8 @@ def _render_sync_section(sync_service: IndexedDBPriceSyncService) -> None:
                 try:
                     result = sync_service.detect_changes()
                     st.session_state.last_sync_result = result
+                    # Add to history
+                    sync_service.add_sync_to_history(result)
                     # Invalidate cached buckets whenever a new sync arrives
                     st.session_state.pop("_change_buckets", None)
                     st.success(f"Selesai! {len(result.changes)} perubahan ditemukan")
@@ -154,14 +156,20 @@ def _render_sync_section(sync_service: IndexedDBPriceSyncService) -> None:
 
     with col2:
         if st.button("Lihat Histori", use_container_width=True):
+            # Clear cache to force fresh IndexedDBPriceSyncService instance
+            _get_sync_service.clear()
+            sync_service = _get_sync_service()
             history = sync_service.get_sync_history(limit=5)
             if history:
                 with st.expander("Sinkron terbaru", expanded=True):
                     for h in reversed(history):
                         ts = h["timestamp"][:19].replace("T", " ")
+                        total_changes = h.get("total_changes", 0)
+                        odoo_count = h.get("total_odoo_products", 0)
+                        local_count = h.get("total_local_products", 0)
                         st.caption(
-                            f"{ts}: {len(h['changes'])} changes "
-                            f"(Odoo: {h['total_odoo_products']}, Local: {h['total_local_products']})"
+                            f"{ts}: {total_changes} perubahan "
+                            f"(Odoo: {odoo_count}, Local: {local_count})"
                         )
             else:
                 st.info("Belum ada riwayat")
