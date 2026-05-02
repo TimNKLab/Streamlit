@@ -19,6 +19,12 @@ def _get_sync_service() -> IndexedDBPriceSyncService:
     return IndexedDBPriceSyncService()
 
 
+def _clear_sync_cache():
+    """Clear the sync service cache to force re-instantiation."""
+    _get_sync_service.clear()
+    st.success("Cache cleared! Refresh the page to reload with new credentials.")
+
+
 def _build_change_lookup(result: SyncResult) -> Dict[str, list]:
     """
     Bucket changes by type in a single O(n) pass.
@@ -132,7 +138,7 @@ def _render_sync_section(sync_service: IndexedDBPriceSyncService) -> None:
     else:
         st.info("ℹ️ Sinkronisasi pertama akan menyimpan semua produk ke perangkat ini")
 
-    col1, col2 = st.columns([2, 1])
+    col1, col2, col3 = st.columns([2, 1, 1])
 
     with col1:
         if st.button("Update Harga", type="primary", use_container_width=True):
@@ -159,6 +165,10 @@ def _render_sync_section(sync_service: IndexedDBPriceSyncService) -> None:
                         )
             else:
                 st.info("Belum ada riwayat")
+
+    with col3:
+        if st.button("Clear Cache", use_container_width=True):
+            _clear_sync_cache()
 
 
 def _render_results_section(sync_service: IndexedDBPriceSyncService, result: SyncResult) -> None:
