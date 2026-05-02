@@ -156,23 +156,28 @@ def _render_sync_section(sync_service: IndexedDBPriceSyncService) -> None:
 
     with col2:
         if st.button("Lihat Histori", use_container_width=True):
-            # Clear cache to force fresh IndexedDBPriceSyncService instance
-            _get_sync_service.clear()
-            sync_service = _get_sync_service()
-            history = sync_service.get_sync_history(limit=5)
-            if history:
-                with st.expander("Sinkron terbaru", expanded=True):
-                    for h in reversed(history):
-                        ts = h["timestamp"][:19].replace("T", " ")
-                        total_changes = h.get("total_changes", 0)
-                        odoo_count = h.get("total_odoo_products", 0)
-                        local_count = h.get("total_local_products", 0)
-                        st.caption(
-                            f"{ts}: {total_changes} perubahan "
-                            f"(Odoo: {odoo_count}, Local: {local_count})"
-                        )
-            else:
-                st.info("Belum ada riwayat")
+            try:
+                # Use the passed sync_service parameter directly
+                history = sync_service.get_sync_history(limit=5)
+                if history:
+                    with st.expander("Sinkron terbaru", expanded=True):
+                        for h in reversed(history):
+                            ts = h["timestamp"][:19].replace("T", " ")
+                            total_changes = h.get("total_changes", 0)
+                            odoo_count = h.get("total_odoo_products", 0)
+                            local_count = h.get("total_local_products", 0)
+                            st.caption(
+                                f"{ts}: {total_changes} perubahan "
+                                f"(Odoo: {odoo_count}, Local: {local_count})"
+                            )
+                else:
+                    st.info("Belum ada riwayat sinkronisasi")
+            except AttributeError as e:
+                # Method not found - clear cache and retry once
+                _get_sync_service.clear()
+                st.warning("Cache dibersihkan. Silakan klik 'Lihat Histori' lagi.")
+            except Exception as e:
+                st.error(f"Gagal memuat riwayat: {e}")
 
     with col3:
         if st.button("Clear Cache", use_container_width=True):
