@@ -372,12 +372,17 @@ class IndexedDBPriceSyncService:
         if "price_sync_history" not in st.session_state:
             st.session_state.price_sync_history = []
         
+        # Build change summary by type
+        change_summary = {}
+        for c in result.changes:
+            change_summary[c.change_type] = change_summary.get(c.change_type, 0) + 1
+        
         history_entry = {
             "timestamp": datetime.now().isoformat(),
             "total_changes": len(result.changes),
             "total_odoo_products": result.total_odoo_products,
             "total_local_products": getattr(result, 'total_local_products', 0),
-            "change_summary": result.summary,
+            "change_summary": change_summary,
         }
         
         st.session_state.price_sync_history.append(history_entry)
