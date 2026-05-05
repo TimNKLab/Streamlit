@@ -24,6 +24,7 @@ from ui.pages.dsi_report import render_dsi_report_page
 from ui.pages.stock_card import render_stock_card_page
 from ui.pages.price_tag_generator import render_price_tag_page
 from ui.pages.price_sync import render_price_sync_page
+from ui.pages.internal_moves import render_internal_moves_page
 from utils.persistence import save_active_tab, restore_active_tab, has_saved_barcodes
 
 # Configure page
@@ -71,6 +72,7 @@ def main():
         "stock_card": ("Stock Card", render_stock_card_page),
         "price_sync": ("Price Sync", render_price_sync_page),
         "price_tag": ("Price Tag", render_price_tag_page),
+        "internal_moves": ("Internal Moves", render_internal_moves_page),
     }
     
     # Render tab buttons

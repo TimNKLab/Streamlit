@@ -297,9 +297,11 @@ def _render_action_buttons(
             if not selected_changes:
                 st.warning("Tidak ada produk dipilih")
             else:
-                # Fetch odoo products for committing to IndexedDB
-                with st.spinner("Mengambil data produk..."):
-                    odoo_products = sync_service.fetch_odoo_products()
+                # Reuse products fetched during detect_changes to avoid redundant RPCs.
+                odoo_products = getattr(sync_service, "get_last_odoo_products", lambda: None)()
+                if not odoo_products:
+                    with st.spinner("Mengambil data produk..."):
+                        odoo_products = sync_service.fetch_odoo_products()
                 
                 pdf_bytes = _generate_price_tags_pdf(
                     sync_service, result, selected_changes, selected_barcodes, odoo_products
