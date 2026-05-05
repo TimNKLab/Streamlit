@@ -106,6 +106,9 @@ class IndexedDBPriceSyncService:
         self.conn_mgr = conn_mgr or connection_manager
         self.indexeddb = indexeddb or IndexedDBBridge()
         self.excel_path = excel_path or str(Path(__file__).parent.parent / "data" / "products.xlsx")
+
+        self._pricelist_id_cache: Dict[str, Optional[int]] = {}
+        self._last_odoo_products: Optional[Dict[str, dict]] = None
     
     def fetch_odoo_products(self) -> Dict[str, dict]:
         """Fetch active goods from Odoo with pricelist discounts."""
@@ -171,6 +174,7 @@ class IndexedDBPriceSyncService:
                 }
             
             print(f"[SYNC] Fetched {len(odoo_products)} products from Odoo")
+            self._last_odoo_products = odoo_products
             return odoo_products
             
         except Exception as e:
@@ -180,6 +184,9 @@ class IndexedDBPriceSyncService:
     def _get_pricelist_id_by_external_id(self, external_id: str) -> Optional[int]:
         """Resolve pricelist external ID to database ID."""
         try:
+            if external_id in self._pricelist_id_cache:
+                return self._pricelist_id_cache[external_id]
+
             parts = external_id.split(".")
             if len(parts) != 2:
                 return None
@@ -197,10 +204,15 @@ class IndexedDBPriceSyncService:
                 return None
             
             with self.conn_mgr.connection() as client:
-                return _resolve(client)
+                res_id = _resolve(client)
+                self._pricelist_id_cache[external_id] = res_id
+                return res_id
         except Exception as e:
             print(f"[SYNC] Error resolving pricelist ID: {e}")
         return None
+
+    def get_last_odoo_products(self) -> Optional[Dict[str, dict]]:
+        return self._last_odoo_products
     
     def _load_excel_baseline(self) -> Dict[str, dict]:
         """Load baseline from Excel file (fallback for first-time users)."""
@@ -352,44 +364,26 @@ class IndexedDBPriceSyncService:
         }
     
     def get_sync_history(self, limit: int = 5) -> List[Dict[str, Any]]:
-        """Get recent sync history from session state or return empty list."""
-        import streamlit as st
-        
-        # Get history from session state if available
-        history = st.session_state.get("price_sync_history", [])
-        
-        if not history:
-            return []
-        
-        # Return most recent entries up to limit
-        return history[-limit:]
+        """Get recent sync history."""
+        return self.indexeddb.get_sync_history(limit=limit)
     
     def add_sync_to_history(self, result: SyncResult) -> None:
         """Add a sync result to the history."""
-        import streamlit as st
         from datetime import datetime
-        
-        if "price_sync_history" not in st.session_state:
-            st.session_state.price_sync_history = []
-        
-        # Build change summary by type
-        change_summary = {}
+
+        change_summary: Dict[str, int] = {}
         for c in result.changes:
             change_summary[c.change_type] = change_summary.get(c.change_type, 0) + 1
-        
+
         history_entry = {
             "timestamp": datetime.now().isoformat(),
             "total_changes": len(result.changes),
             "total_odoo_products": result.total_odoo_products,
-            "total_local_products": getattr(result, 'total_local_products', 0),
+            "total_local_products": getattr(result, "total_local_products", 0),
             "change_summary": change_summary,
         }
-        
-        st.session_state.price_sync_history.append(history_entry)
-        
-        # Keep only last 20 entries to prevent memory bloat
-        if len(st.session_state.price_sync_history) > 20:
-            st.session_state.price_sync_history = st.session_state.price_sync_history[-20:]
+
+        self.indexeddb.add_sync_history(history_entry)
     
     def export_changes_to_excel(self, result: SyncResult, output_path: str) -> None:
         """Export changes to Excel for review."""

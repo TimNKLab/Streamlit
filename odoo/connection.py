@@ -214,6 +214,48 @@ class OdooConnectionManager:
 
         return self._execute(_worker)
 
+    def create(self, model_name: str, values: Dict[str, Any]) -> int:
+        """Create a new record and return its ID."""
+        def _worker(client: odoorpc.ODOO) -> int:
+            model = client.env[model_name]
+            return model.create(values)
+        return self._execute(_worker)
+
+    def write(self, model_name: str, ids: List[int], values: Dict[str, Any]) -> bool:
+        """Update existing records. Returns True if successful."""
+        def _worker(client: odoorpc.ODOO) -> bool:
+            model = client.env[model_name]
+            return model.write(ids, values)
+        return self._execute(_worker)
+
+    def unlink(self, model_name: str, ids: List[int]) -> bool:
+        """Delete records. Returns True if successful."""
+        def _worker(client: odoorpc.ODOO) -> bool:
+            model = client.env[model_name]
+            return model.unlink(ids)
+        return self._execute(_worker)
+
+    def call_method(
+        self,
+        model_name: str,
+        ids: List[int],
+        method_name: str,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        """Call an Odoo method on a recordset.
+
+        This is used for workflow actions like `action_confirm`, `action_assign`, and `button_validate`.
+        """
+
+        def _worker(client: odoorpc.ODOO) -> Any:
+            model = client.env[model_name]
+            records = model.browse(ids)
+            method = getattr(records, method_name)
+            return method(*args, **kwargs)
+
+        return self._execute(_worker)
+
     def ping(self) -> bool:
         """Check if Odoo is reachable by checking the version."""
         try:
