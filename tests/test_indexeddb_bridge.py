@@ -10,11 +10,9 @@ def test_bridge_initialization():
     assert bridge.component_path.endswith("indexeddb_manager.html")
 
 
-def test_upsert_and_get_products():
+def test_upsert_and_get_products(tmp_path):
     """Test upserting and retrieving products."""
-    import streamlit as st
-    
-    bridge = IndexedDBBridge()
+    bridge = IndexedDBBridge(storage_dir=str(tmp_path))
     
     # Clear any existing data
     bridge.clear_all()
@@ -27,13 +25,14 @@ def test_upsert_and_get_products():
     assert result["success"] is True
     assert result["count"] == 1
     
-    # In the simplified implementation, products are in session state
-    # This test verifies the structure works
+    products = bridge.get_all_products()
+    assert len(products) == 1
+    assert products[0]["barcode"] == "123456"
 
 
-def test_get_product_count():
+def test_get_product_count(tmp_path):
     """Test getting product count."""
-    bridge = IndexedDBBridge()
+    bridge = IndexedDBBridge(storage_dir=str(tmp_path))
     
     # After clearing, count should be 0
     bridge.clear_all()
@@ -48,9 +47,9 @@ def test_get_product_count():
     assert count == 1
 
 
-def test_clear_all():
+def test_clear_all(tmp_path):
     """Test clearing all products."""
-    bridge = IndexedDBBridge()
+    bridge = IndexedDBBridge(storage_dir=str(tmp_path))
     
     # Add then clear
     bridge.upsert_products([{"barcode": "123", "name": "Test", "het": 1000, "diskon": None, "last_sync": "2026-05-01T10:00:00"}])
@@ -60,14 +59,12 @@ def test_clear_all():
     assert bridge.get_product_count() == 0
 
 
-def test_sync_history():
+def test_sync_history(tmp_path):
     """Test sync history operations."""
-    bridge = IndexedDBBridge()
+    bridge = IndexedDBBridge(storage_dir=str(tmp_path))
     
-    # Clear history
-    session_key = f"_indexeddb_history_{bridge._component_key}"
-    import streamlit as st
-    st.session_state[session_key] = []
+    # Clear history by overwriting file
+    bridge._write_json_file(bridge._history_path, [])
     
     # Add records
     bridge.add_sync_history({"timestamp": "2026-05-01T10:00:00", "changes": 5})
