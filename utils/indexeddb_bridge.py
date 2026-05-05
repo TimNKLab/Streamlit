@@ -23,7 +23,7 @@ class IndexedDBBridge:
     communication bridge.
     """
     
-    def __init__(self, component_path: Optional[str] = None):
+    def __init__(self, component_path: Optional[str] = None, storage_dir: Optional[str] = None):
         if component_path is None:
             # Default to components folder
             root = Path(__file__).parent.parent
@@ -31,7 +31,29 @@ class IndexedDBBridge:
         
         self.component_path = component_path
         self._component_html = open(component_path).read()
-        self._component_key = "indexeddb_manager_" + str(uuid.uuid4())[:8]
+        self._component_key = "indexeddb_manager"
+
+        root = Path(__file__).parent.parent
+        if storage_dir is None:
+            session_dir = root / "session_data"
+        else:
+            session_dir = Path(storage_dir)
+        session_dir.mkdir(exist_ok=True)
+        self._products_path = session_dir / "price_sync_products.json"
+        self._history_path = session_dir / "price_sync_history.json"
+
+    def _read_json_file(self, path: Path) -> Any:
+        try:
+            if not path.exists():
+                return None
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return None
+
+    def _write_json_file(self, path: Path, payload: Any) -> None:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
     
     def _render_component(self, height: int = 0) -> None:
         """Render the IndexedDB component (invisible if height=0)."""
@@ -44,16 +66,15 @@ class IndexedDBBridge:
         session state. The component must be rendered first.
         """
         self._render_component(height=0)
-        
-        # Check if we have cached products in session state
-        # (Set by JavaScript via postMessage)
-        session_key = f"_indexeddb_products_{self._component_key}"
-        
-        if session_key in st.session_state:
-            return st.session_state[session_key]
-        
-        # Return empty list if not yet populated
-        return []
+
+        payload = self._read_json_file(self._products_path)
+        if not payload:
+            return []
+        if isinstance(payload, dict):
+            items = payload.get("products", [])
+        else:
+            items = payload
+        return items if isinstance(items, list) else []
     
     def get_product(self, barcode: str) -> Optional[Dict[str, Any]]:
         """Get a single product by barcode."""
@@ -70,22 +91,19 @@ class IndexedDBBridge:
         and the JavaScript component reads from there.
         """
         self._render_component(height=0)
-        
-        session_key = f"_indexeddb_products_{self._component_key}"
-        
-        # Get existing products
-        existing = {}
-        if session_key in st.session_state:
-            for p in st.session_state[session_key]:
-                existing[p.get("barcode")] = p
-        
-        # Update with new products
+
+        existing: Dict[str, Dict[str, Any]] = {}
+        for p in self.get_all_products():
+            bc = p.get("barcode")
+            if bc:
+                existing[str(bc)] = p
+
         for p in products:
-            existing[p.get("barcode")] = p
-        
-        # Store back
-        st.session_state[session_key] = list(existing.values())
-        
+            bc = p.get("barcode")
+            if bc:
+                existing[str(bc)] = p
+
+        self._write_json_file(self._products_path, {"products": list(existing.values())})
         return {"success": True, "count": len(products)}
     
     def get_product_count(self) -> int:
@@ -95,38 +113,30 @@ class IndexedDBBridge:
     def clear_all(self) -> Dict[str, Any]:
         """Clear all products from IndexedDB."""
         self._render_component(height=0)
-        
-        session_key = f"_indexeddb_products_{self._component_key}"
-        st.session_state[session_key] = []
-        
+
+        self._write_json_file(self._products_path, {"products": []})
         return {"success": True}
     
     def add_sync_history(self, record: Dict[str, Any]) -> Dict[str, Any]:
         """Add a sync history record."""
         self._render_component(height=0)
-        
-        session_key = f"_indexeddb_history_{self._component_key}"
-        
-        if session_key not in st.session_state:
-            st.session_state[session_key] = []
-        
-        st.session_state[session_key].append(record)
-        
-        # Keep only last 50 records
-        if len(st.session_state[session_key]) > 50:
-            st.session_state[session_key] = st.session_state[session_key][-50:]
-        
+
+        history = self._read_json_file(self._history_path)
+        if not isinstance(history, list):
+            history = []
+
+        history.append(record)
+        if len(history) > 50:
+            history = history[-50:]
+
+        self._write_json_file(self._history_path, history)
         return {"success": True}
     
     def get_sync_history(self, limit: int = 10) -> List[Dict[str, Any]]:
         """Get recent sync history."""
         self._render_component(height=0)
-        
-        session_key = f"_indexeddb_history_{self._component_key}"
-        
-        if session_key not in st.session_state:
+
+        history = self._read_json_file(self._history_path)
+        if not isinstance(history, list):
             return []
-        
-        # Return most recent first
-        history = st.session_state[session_key]
         return history[-limit:][::-1]
