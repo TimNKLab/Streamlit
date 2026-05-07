@@ -3,9 +3,14 @@
 import streamlit as st
 import pandas as pd
 import math
+import base64
+import json
+import os
 from datetime import datetime
 from logic.price_tag_service import PriceTagService
 from utils.persistence import save_session, restore_session, clear_session, has_saved_session
+from odoo.vendor_bill_services import get_vendor_bill_lines_by_number
+from utils.indexeddb_bridge import IndexedDBBridge
 
 
 @st.cache_resource(ttl=3600, hash_funcs={PriceTagService: lambda x: "v3"})  # Cache for 1 hour, v3 with barcode_suffix column
@@ -49,6 +54,22 @@ class PriceTagPage:
             st.session_state.price_tag_batch_mode = False  # Default: single lookup (slower but more accurate)
         if 'price_tag_restored' not in st.session_state:
             st.session_state.price_tag_restored = False
+
+        if 'thermal_vendor_bill_number' not in st.session_state:
+            st.session_state.thermal_vendor_bill_number = ""
+        if 'thermal_lines' not in st.session_state:
+            st.session_state.thermal_lines = []
+        if 'thermal_manual_lines' not in st.session_state:
+            st.session_state.thermal_manual_lines = []
+        if 'thermal_pdf_ready' not in st.session_state:
+            st.session_state.thermal_pdf_ready = False
+        if 'thermal_pdf_bytes' not in st.session_state:
+            st.session_state.thermal_pdf_bytes = None
+        if 'thermal_rotate' not in st.session_state:
+            st.session_state.thermal_rotate = False
+
+        if 'qz_printer_name' not in st.session_state:
+            st.session_state.qz_printer_name = "XP-DP4601B"
         
         # Try to restore from localStorage on first load
         if not st.session_state.price_tag_restored:
@@ -708,6 +729,308 @@ class PriceTagPage:
             st.error(f"❌ Gagal membuat PDF: {str(e)}")
             import traceback
             st.error(traceback.format_exc())
+
+    def _resolve_het_from_indexeddb(self, barcode: str, fallback_het: float | None) -> float | None:
+        try:
+            indexeddb = IndexedDBBridge()
+            cached = indexeddb.get_product(barcode)
+            if cached and cached.get("het") is not None:
+                return float(cached["het"])
+        except Exception:
+            pass
+        if fallback_het is None:
+            return None
+        try:
+            return float(fallback_het)
+        except (TypeError, ValueError):
+            return None
+
+    def _build_thermal_items(self, lines: list[dict]) -> list[dict]:
+        items: list[dict] = []
+        for line in lines:
+            barcode = str(line.get("barcode") or "").strip()
+            name = str(line.get("name") or "").strip()
+            qty_val = line.get("qty")
+            het_val = line.get("het")
+
+            if not barcode or not name:
+                continue
+
+            try:
+                qty = int(float(qty_val))
+            except (TypeError, ValueError):
+                qty = 0
+
+            if qty <= 0:
+                continue
+
+            het = self._resolve_het_from_indexeddb(barcode, het_val)
+
+            for _ in range(qty):
+                items.append({"barcode": barcode, "name": name, "het": het})
+        return items
+
+    def _fetch_vendor_bill(self):
+        bill_number = (st.session_state.thermal_vendor_bill_number or "").strip()
+        if not bill_number:
+            st.warning("Masukkan nomor vendor bill")
+            return
+
+        with st.spinner("Mengambil vendor bill dari Odoo..."):
+            lines = get_vendor_bill_lines_by_number(bill_number)
+
+        if not lines:
+            st.error("Vendor bill tidak ditemukan / tidak ada line dengan barcode")
+            st.session_state.thermal_lines = []
+            return
+
+        st.session_state.thermal_lines = [
+            {"Print": True, "barcode": l.barcode, "name": l.name, "qty": l.qty, "het": l.het}
+            for l in lines
+        ]
+        st.session_state.thermal_pdf_ready = False
+        st.session_state.thermal_pdf_bytes = None
+
+    def _init_manual_lines(self):
+        if st.session_state.thermal_manual_lines:
+            return
+        st.session_state.thermal_manual_lines = [
+            {"barcode": "", "qty": 1} for _ in range(12)
+        ]
+
+    def _generate_thermal_pdf(self, source_lines: list[dict]):
+        items = self._build_thermal_items(source_lines)
+        if not items:
+            st.error("Tidak ada item untuk dicetak")
+            return
+
+        st.session_state.thermal_pdf_ready = False
+        st.session_state.thermal_pdf_bytes = None
+
+        try:
+            with st.spinner("Membuat PDF thermal..."):
+                if st.session_state.thermal_rotate:
+                    pdf_bytes = self.service.generate_thermal_labels_pdf(items, width_mm=18.0, height_mm=28.0)
+                else:
+                    pdf_bytes = self.service.generate_thermal_labels_pdf(items, width_mm=28.0, height_mm=18.0)
+
+            if not pdf_bytes or len(pdf_bytes) < 100:
+                st.error("PDF yang dihasilkan kosong atau tidak valid")
+                return
+
+            st.session_state.thermal_pdf_bytes = pdf_bytes
+            st.session_state.thermal_pdf_ready = True
+            st.toast(f"✅ {len(items)} label thermal dibuat!", icon="✅")
+        except Exception as e:
+            st.error(f"Gagal membuat PDF thermal: {e}")
+
+    def _build_tspl_jobs(self, source_lines: list[dict]) -> list[str]:
+        items = self._build_thermal_items(source_lines)
+        if not items:
+            return []
+
+        def esc(s: str) -> str:
+            return (s or "").replace('"', "'")
+
+        jobs: list[str] = []
+        for item in items:
+            barcode = str(item.get("barcode") or "").strip()
+            name = str(item.get("name") or "").strip()
+            het = item.get("het")
+            if not barcode or not name:
+                continue
+
+            het_text = self.service.format_price(het)
+            if het_text and not het_text.endswith(",-"):
+                het_text = f"{het_text},-"
+
+            tspl = "\n".join(
+                [
+                    "SIZE 28 mm, 18 mm",
+                    "GAP 2 mm, 0 mm",
+                    "DIRECTION 1",
+                    "CLS",
+                    f'TEXT 24,10,"0",0,1,1,"{esc(name)}"',
+                    f'BARCODE 20,40,"128",50,1,0,2,2,"{esc(barcode)}"',
+                    f'TEXT 90,98,"0",0,1,1,"{esc(barcode)}"',
+                    f'TEXT 60,125,"0",0,2,2,"{esc(het_text)}"',
+                    "PRINT 1,1",
+                ]
+            )
+            jobs.append(tspl)
+
+        return jobs
+
+    def _qz_get_secrets(self) -> tuple[str | None, str | None]:
+        cert = None
+        private_key = None
+        try:
+            cert = st.secrets.get("QZ_CERT")
+            private_key = st.secrets.get("QZ_PRIVATE_KEY")
+        except Exception:
+            pass
+        if not cert:
+            cert = os.environ.get("QZ_CERT")
+        if not private_key:
+            private_key = os.environ.get("QZ_PRIVATE_KEY")
+        return cert, private_key
+
+    def render_thermal_section(self):
+        st.subheader("Thermal Label Generator (18mm x 28mm)")
+
+        st.checkbox("Rotate 90° (swap 28x18)", key="thermal_rotate")
+
+        with st.expander("🧾 Ambil dari Vendor Bill (Odoo)", expanded=True):
+            st.text_input("Nomor Vendor Bill", key="thermal_vendor_bill_number")
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                if st.button("Fetch Vendor Bill", type="primary", use_container_width=True):
+                    self._fetch_vendor_bill()
+            with col2:
+                if st.button("Clear Vendor Bill", type="secondary", use_container_width=True):
+                    st.session_state.thermal_lines = []
+                    st.session_state.thermal_pdf_ready = False
+                    st.session_state.thermal_pdf_bytes = None
+
+            if st.session_state.thermal_lines:
+                thermal_df = pd.DataFrame(st.session_state.thermal_lines)
+                edited = st.data_editor(
+                    thermal_df,
+                    hide_index=True,
+                    use_container_width=True,
+                    column_config={
+                        "Print": st.column_config.CheckboxColumn("Print", default=True),
+                        "barcode": st.column_config.TextColumn("Barcode"),
+                        "name": st.column_config.TextColumn("Name", width="large"),
+                        "qty": st.column_config.NumberColumn("Qty", min_value=0, step=1),
+                        "het": st.column_config.NumberColumn("HET"),
+                    },
+                    key="thermal_vendor_bill_editor",
+                )
+                st.session_state.thermal_lines = edited.to_dict("records")
+
+                if st.button("Generate Thermal PDF (Vendor Bill)", type="primary"):
+                    selected = [r for r in st.session_state.thermal_lines if r.get("Print")]
+                    self._generate_thermal_pdf(selected)
+
+                st.text_input("QZ Printer Name", key="qz_printer_name")
+                if st.button("🖨️ Print via QZ Tray (TSPL)", type="secondary"):
+                    selected = [r for r in st.session_state.thermal_lines if r.get("Print")]
+                    jobs = self._build_tspl_jobs(selected)
+                    if not jobs:
+                        st.warning("Tidak ada item untuk dicetak")
+                    else:
+                        cert, private_key = self._qz_get_secrets()
+                        if not cert or not private_key:
+                            st.error("QZ secrets missing. Set QZ_CERT and QZ_PRIVATE_KEY in st.secrets or env.")
+                        else:
+                            try:
+                                import streamlit.components.v1 as components
+                                html = open("components/qz_print.html", "r", encoding="utf-8").read()
+                                payload = {
+                                    "cert": cert,
+                                    "privateKey": private_key,
+                                    "printerName": st.session_state.qz_printer_name,
+                                    "jobs": jobs,
+                                }
+                                components.html(
+                                    f"<script>window.__QZ_PAYLOAD__ = {json.dumps(payload)};</script>\n" + html,
+                                    height=0,
+                                )
+                                st.info("Jika QZ Tray meminta izin, klik Allow.")
+                            except Exception as e:
+                                st.error(f"Gagal memanggil QZ Tray: {e}")
+
+        with st.expander("⌨️ Input Manual Barcode + Qty", expanded=False):
+            self._init_manual_lines()
+            manual_df = pd.DataFrame(st.session_state.thermal_manual_lines)
+            edited = st.data_editor(
+                manual_df,
+                hide_index=True,
+                use_container_width=True,
+                column_config={
+                    "barcode": st.column_config.TextColumn("Barcode"),
+                    "qty": st.column_config.NumberColumn("Qty", min_value=0, step=1),
+                },
+                key="thermal_manual_editor",
+            )
+            st.session_state.thermal_manual_lines = edited.to_dict("records")
+
+            if st.button("Generate Thermal PDF (Manual)", type="primary"):
+                manual_lines = []
+                for row in st.session_state.thermal_manual_lines:
+                    barcode = str(row.get("barcode") or "").strip()
+                    if not barcode:
+                        continue
+                    product = self.service.lookup_product(barcode)
+                    if not product:
+                        continue
+                    manual_lines.append(
+                        {
+                            "barcode": barcode,
+                            "name": product.get("name", ""),
+                            "qty": row.get("qty", 0),
+                            "het": product.get("het"),
+                        }
+                    )
+                self._generate_thermal_pdf(manual_lines)
+
+        if st.session_state.get("thermal_pdf_ready") and st.session_state.get("thermal_pdf_bytes"):
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            col_print, col_dl = st.columns([1, 1])
+
+            with col_print:
+                if st.button("🖨️ Print Thermal", type="primary", use_container_width=True):
+                    try:
+                        import streamlit.components.v1 as components
+
+                        pdf_b64 = base64.b64encode(st.session_state.thermal_pdf_bytes).decode("ascii")
+                        components.html(
+                            f"""
+                            <script>
+                              (function() {{
+                                try {{
+                                  const b64 = "{pdf_b64}";
+                                  const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+                                  const blob = new Blob([bytes], {{ type: 'application/pdf' }});
+                                  const url = URL.createObjectURL(blob);
+                                  const w = window.open(url, '_blank');
+                                  if (!w) {{
+                                    alert('Popup blocked. Allow popups for this site, then click Print again.');
+                                    return;
+                                  }}
+                                  const t = setInterval(() => {{
+                                    try {{
+                                      if (w.document && w.document.readyState === 'complete') {{
+                                        clearInterval(t);
+                                        w.focus();
+                                        w.print();
+                                      }}
+                                    }} catch (e) {{
+                                      // cross-origin not expected for blob, but keep retrying
+                                    }}
+                                  }}, 250);
+                                }} catch (e) {{
+                                  console.error(e);
+                                  alert('Failed to open print window: ' + (e.message || e));
+                                }}
+                              }})();
+                            </script>
+                            """,
+                            height=0,
+                        )
+                    except Exception as e:
+                        st.error(f"Gagal membuka print dialog: {e}")
+
+            with col_dl:
+                st.download_button(
+                    label="⬇️ Download Thermal PDF",
+                    data=st.session_state.thermal_pdf_bytes,
+                    file_name=f"thermal_labels_{timestamp}.pdf",
+                    mime="application/pdf",
+                    type="secondary",
+                    use_container_width=True,
+                )
     
     def render_pdf_section(self):
         """Render PDF generation and download section."""
@@ -776,9 +1099,13 @@ class PriceTagPage:
                 self.service._load_parquet_to_memory()
                 st.success("Harga sudah terupdate!")
              
-        self.render_database_section()
-        self.render_items_table()
-        self.render_pdf_section()
+        tab_a4, tab_thermal = st.tabs(["A4 Price Tag", "Thermal 18x28mm"])
+        with tab_a4:
+            self.render_database_section()
+            self.render_items_table()
+            self.render_pdf_section()
+        with tab_thermal:
+            self.render_thermal_section()
         
         # NK_PR_AUTOFOCUS: Process any pending auto-focus after full page render
         self._process_pending_focus()
