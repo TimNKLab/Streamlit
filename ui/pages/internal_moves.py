@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date as date_cls
 from typing import Any, Dict, List, Tuple
@@ -48,9 +49,14 @@ class InternalMoveContact:
 def _load_contacts() -> List[InternalMoveContact]:
     contacts_raw: Any = None
 
-    secrets: Dict[str, Any] = dict(getattr(st, "secrets", {}) or {})
+    secrets_obj = getattr(st, "secrets", {}) or {}
+    try:
+        secrets: Dict[str, Any] = dict(secrets_obj)
+    except Exception:
+        secrets = {}
+
     internal_moves = secrets.get("internal_moves")
-    if isinstance(internal_moves, dict):
+    if isinstance(internal_moves, Mapping):
         contacts_raw = internal_moves.get("contacts")
 
     if contacts_raw is None:
