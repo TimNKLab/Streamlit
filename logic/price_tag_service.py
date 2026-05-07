@@ -26,6 +26,18 @@ try:
 except ImportError:
     HAS_REPORTLAB = False
 
+# Fallbacks so this module can still import even if ReportLab isn't available.
+# Some deployments (or partial installs) may not include ReportLab, and failing
+# during import can surface as confusing import errors.
+if not HAS_REPORTLAB:
+    A4 = (595.275590551, 841.88976378)
+    cm = 28.3464566929
+    mm = 2.83464566929
+    pdfcanvas = None
+    pdfmetrics = None
+    TTFont = None
+    rcolors = None
+    code128 = None
 
 # Top/fast-moving products - hardcoded for instant lookup (O(1))
 TOP_PRODUCTS = {
@@ -69,6 +81,9 @@ def _format_price_cached(price_int: int) -> str:
 # Key: (text, font_name, font_size)
 @lru_cache(maxsize=8192)
 def _str_width(text: str, font: str, size: int) -> float:
+    if pdfmetrics is None:
+        # Approximation only; used when ReportLab isn't installed.
+        return float(len(text) * size) * 0.55
     return pdfmetrics.stringWidth(text, font, size)
 
 
