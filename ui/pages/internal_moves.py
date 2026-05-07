@@ -22,6 +22,7 @@ from odoo.stock_services import (
     get_products_uom_ids,
     get_stock_quant_diffs_for_user_at_location,
     get_employee_partner_id_by_name,
+    get_employee_partner_id,
     get_internal_picking_type_id,
     list_users,
 )
@@ -36,6 +37,7 @@ from odoo.connection import connection_manager
 class InternalMoveContact:
     label: str
     name: str
+    employee_id: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -68,8 +70,24 @@ def _load_contacts() -> List[InternalMoveContact]:
             continue
         label = item.get("label")
         name = item.get("name")
-        if isinstance(label, str) and isinstance(name, str) and name.strip():
-            result.append(InternalMoveContact(label=label, name=name.strip()))
+        employee_id = item.get("employee_id")
+
+        parsed_employee_id: int | None = None
+        if isinstance(employee_id, int):
+            parsed_employee_id = employee_id
+        elif isinstance(employee_id, str) and employee_id.strip().isdigit():
+            parsed_employee_id = int(employee_id.strip())
+
+        parsed_name: str = ""
+        if isinstance(name, str) and name.strip():
+            parsed_name = name.strip()
+
+        if isinstance(label, str) and label.strip() and (parsed_name or parsed_employee_id is not None):
+            result.append(InternalMoveContact(
+                label=label.strip(),
+                name=parsed_name,
+                employee_id=parsed_employee_id,
+            ))
     return result
 
 
@@ -259,7 +277,7 @@ def _create_transfers(
 # UI helpers
 # ---------------------------------------------------------------------------
 
-def _render_contact_selector() -> Tuple[str | None, str | None]:
+def _render_contact_selector() -> Tuple[InternalMoveContact | None, str | None]:
     contacts = _load_contacts()
     if not contacts:
         st.error(
@@ -277,7 +295,7 @@ def _render_contact_selector() -> Tuple[str | None, str | None]:
         return None, None
 
     selected = next((c for c in contacts if c.label == selected_label), None)
-    return (selected.name, selected.label) if selected else (None, None)
+    return (selected, selected.label) if selected else (None, None)
 
 
 def _resolve_display_location(default_name: str):
@@ -320,14 +338,17 @@ def render_internal_moves_page() -> None:
 
     # --- Kontak ---
     st.subheader("Kontak")
-    employee_name, label = _render_contact_selector()
+    contact, label = _render_contact_selector()
 
     partner_id: int | None = None
-    if employee_name is not None:
-        partner_id = _get_partner_id(employee_name)
+    if contact is not None:
+        if contact.employee_id is not None:
+            partner_id = get_employee_partner_id(contact.employee_id)
+        else:
+            partner_id = _get_partner_id(contact.name)
         if partner_id is None:
             st.error(
-                f"Karyawan '{label}' (name='{employee_name}') tidak ditemukan atau tidak memiliki partner. "
+                f"Karyawan '{label}' tidak ditemukan atau tidak memiliki partner. "
                 "Pastikan karyawan memiliki `user_id` atau `address_home_id` di Odoo."
             )
         else:
