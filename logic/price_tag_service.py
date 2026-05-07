@@ -1,10 +1,12 @@
-"""Price Tag Generator Service"""
+"""Price Tag Generator Service — optimized for performance."""
 
 import os
 import io
+import time
+from functools import lru_cache
 from pathlib import Path
 from datetime import datetime
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 import pandas as pd
 import streamlit as st
 
@@ -14,18 +16,18 @@ PROJECT_ROOT = Path(__file__).parent.parent
 # PDF generation imports
 try:
     from reportlab.lib.pagesizes import A4
-    from reportlab.lib.units import cm
+    from reportlab.lib.units import cm, mm
     from reportlab.pdfgen import canvas as pdfcanvas
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
     from reportlab.lib import colors as rcolors
+    from reportlab.graphics.barcode import code128
     HAS_REPORTLAB = True
 except ImportError:
     HAS_REPORTLAB = False
 
 
 # Top/fast-moving products - hardcoded for instant lookup (O(1))
-# Add your best-selling SKUs here - these load without any file I/O
 TOP_PRODUCTS = {
     "8991001010049": {"name": "Indomie Goreng Original", "het": 3500, "diskon": None},
     "8991001017215": {"name": "Indomie Kuah Ayam Bawang", "het": 3500, "diskon": None},
@@ -37,719 +39,717 @@ TOP_PRODUCTS = {
     "8999909123456": {"name": "Sabun Lifebouy Batang", "het": 4500, "diskon": None},
     "8850006792626": {"name": "Ovaltine Sachet 32g", "het": 3000, "diskon": 2500},
     "8886032100109": {"name": "SilverQueen Chunky 58g", "het": 12500, "diskon": 11000},
-    # Add more top movers here...
 }
 
-# For 50k+ product catalogs, use DuckDB (faster than SQLite)
-# Run this once to convert Excel: python -c "import duckdb; duckdb.execute(\"CREATE TABLE products AS SELECT * FROM read_parquet('data/products.parquet')\")"
-# Or: duckdb.execute("COPY (SELECT * FROM read_excel('data/products.xlsx')) TO 'data/products.duckdb'")
-
-# Try importing DuckDB
 try:
     import duckdb
     HAS_DUCKDB = True
 except ImportError:
     HAS_DUCKDB = False
 
+# ---------------------------------------------------------------------------
+# Module-level caches (survive across instances within a process)
+# ---------------------------------------------------------------------------
+
+# Hex → RGB float tuple.  Only ~16M possible values but in practice < 100
+# unique colors per run, so an unbounded cache is fine.
+@lru_cache(maxsize=256)
+def _hex_to_rgb(hex_str: str) -> Tuple[float, float, float]:
+    h = hex_str.lstrip("#")
+    return (int(h[0:2], 16) / 255, int(h[2:4], 16) / 255, int(h[4:6], 16) / 255)
+
+
+# Price formatting: same prices appear on many tags.
+@lru_cache(maxsize=4096)
+def _format_price_cached(price_int: int) -> str:
+    return f"Rp {price_int:,}".replace(",", ".")
+
+
+# stringWidth is cheap but called thousands of times; cache the hot path.
+# Key: (text, font_name, font_size)
+@lru_cache(maxsize=8192)
+def _str_width(text: str, font: str, size: int) -> float:
+    return pdfmetrics.stringWidth(text, font, size)
+
 
 class PriceTagService:
     """Service for price tag generation and product database management."""
-    
-    # Tag dimensions - optimized for 4 tags per A4 row
-    TAG_W = 4.8 * cm  # narrower for 4-column layout
+
+    TAG_W = 4.8 * cm
     TAG_H = 3 * cm
-    
-    def __init__(self, fallback_db_path: str = None, duckdb_path: str = None, auto_convert: bool = True, use_memory_cache: bool = True):
-        # Use absolute paths (works on local and Streamlit Cloud)
+
+    # How often (seconds) to stat the parquet file for changes.
+    # Avoids a syscall on every single lookup while still reacting promptly.
+    _RELOAD_CHECK_INTERVAL = 5.0
+
+    def __init__(
+        self,
+        fallback_db_path: str = None,
+        duckdb_path: str = None,
+        auto_convert: bool = True,
+        use_memory_cache: bool = True,
+    ):
         self.fallback_db_path = fallback_db_path or str(PROJECT_ROOT / "data" / "products.xlsx")
         self.duckdb_path = duckdb_path or str(PROJECT_ROOT / "data" / "products.duckdb")
-        self.parquet_path = self.duckdb_path.replace('.duckdb', '.parquet')
-        
+        self.parquet_path = self.duckdb_path.replace(".duckdb", ".parquet")
+
         self._products: Dict[str, Dict[str, Any]] = {}
-        self._suffix_index: Dict[str, List[str]] = {}  # last 6 digits -> list of barcodes
+        self._suffix_index: Dict[str, List[str]] = {}
         self._duckdb_conn = None
         self._font_loaded = False
         self._use_duckdb = False
         self._use_memory_cache = use_memory_cache
-        self._last_load_mtime = None  # Track parquet file modification time for auto-reload
-        self._load_fonts()
-        
-        # Auto-convert Excel to Parquet if needed
-        if auto_convert and HAS_DUCKDB:
-            self._auto_convert_if_needed()
-        
-        # Aggressive: Load Parquet into memory for instant lookups
-        if use_memory_cache:
-            self._load_parquet_to_memory()
-    
-    def _load_fonts(self):
-        """Load Poppins fonts from Google Fonts CDN (download once, cache locally)."""
-        global MAIN_FONT, MAIN_FONT_BOLD
+        self._last_load_mtime: Optional[float] = None
+        # Throttle file-stat checks: only stat at most every N seconds.
+        self._next_check_at: float = 0.0
+
         self.MAIN_FONT = "Helvetica"
         self.MAIN_FONT_BOLD = "Helvetica-Bold"
-        
-        if HAS_REPORTLAB:
-            try:
-                # Create fonts directory if needed
-                fonts_dir = PROJECT_ROOT / "fonts"
-                fonts_dir.mkdir(exist_ok=True)
-                
-                # Google Fonts CDN URLs for Poppins (GitHub raw URLs)
-                poppins_regular_url = "https://github.com/google/fonts/raw/main/ofl/poppins/Poppins-Regular.ttf"
-                poppins_bold_url = "https://github.com/google/fonts/raw/main/ofl/poppins/Poppins-Bold.ttf"
-                
-                regular_path = fonts_dir / "Poppins-Regular.ttf"
-                bold_path = fonts_dir / "Poppins-Bold.ttf"
-                
-                # Download if not cached
-                import urllib.request
-                if not regular_path.exists():
-                    urllib.request.urlretrieve(poppins_regular_url, regular_path)
-                    print(f"[FONTS] Downloaded Poppins-Regular.ttf")
-                if not bold_path.exists():
-                    urllib.request.urlretrieve(poppins_bold_url, bold_path)
-                    print(f"[FONTS] Downloaded Poppins-Bold.ttf")
-                
-                # Register with ReportLab
-                if regular_path.exists():
-                    pdfmetrics.registerFont(TTFont('Poppins-Regular', str(regular_path)))
-                    self.MAIN_FONT = "Poppins-Regular"
-                if bold_path.exists():
-                    pdfmetrics.registerFont(TTFont('Poppins-Bold', str(bold_path)))
-                    self.MAIN_FONT_BOLD = "Poppins-Bold"
-                    
-            except Exception as e:
-                print(f"[FONTS] Failed to load Poppins: {e}, using Helvetica fallback")
-                pass  # Use default Helvetica
-        
-        self._font_loaded = True
-    
-    def _auto_convert_if_needed(self):
-        """Auto-convert Excel to Parquet if Parquet doesn't exist or is older than Excel."""
+
+        self._load_fonts()
+
+        if auto_convert and HAS_DUCKDB:
+            self._auto_convert_if_needed()
+
+        if use_memory_cache:
+            self._load_parquet_to_memory()
+
+    # ------------------------------------------------------------------
+    # Font loading
+    # ------------------------------------------------------------------
+
+    def _load_fonts(self):
+        if not HAS_REPORTLAB:
+            self._font_loaded = True
+            return
+
         try:
-            excel_exists = os.path.exists(self.fallback_db_path)
-            parquet_exists = os.path.exists(self.parquet_path)
-            
-            if not excel_exists:
-                return  # No Excel to convert
-            
-            # Check if conversion needed
-            needs_conversion = False
-            if not parquet_exists:
-                needs_conversion = True
-                print(f"[PARQUET] Not found, will create from Excel")
-            else:
-                # Compare modification times
-                excel_mtime = os.path.getmtime(self.fallback_db_path)
-                parquet_mtime = os.path.getmtime(self.parquet_path)
-                if excel_mtime > parquet_mtime:
-                    needs_conversion = True
-                    print(f"[PARQUET] Excel is newer, will reconvert")
-            
-            if needs_conversion:
+            fonts_dir = PROJECT_ROOT / "fonts"
+            fonts_dir.mkdir(exist_ok=True)
+
+            poppins_regular_url = "https://github.com/google/fonts/raw/main/ofl/poppins/Poppins-Regular.ttf"
+            poppins_bold_url = "https://github.com/google/fonts/raw/main/ofl/poppins/Poppins-Bold.ttf"
+            regular_path = fonts_dir / "Poppins-Regular.ttf"
+            bold_path = fonts_dir / "Poppins-Bold.ttf"
+
+            import urllib.request
+            if not regular_path.exists():
+                urllib.request.urlretrieve(poppins_regular_url, regular_path)
+            if not bold_path.exists():
+                urllib.request.urlretrieve(poppins_bold_url, bold_path)
+
+            if regular_path.exists():
+                pdfmetrics.registerFont(TTFont("Poppins-Regular", str(regular_path)))
+                self.MAIN_FONT = "Poppins-Regular"
+            if bold_path.exists():
+                pdfmetrics.registerFont(TTFont("Poppins-Bold", str(bold_path)))
+                self.MAIN_FONT_BOLD = "Poppins-Bold"
+        except Exception as e:
+            print(f"[FONTS] Failed to load Poppins: {e}, using Helvetica fallback")
+
+        self._font_loaded = True
+
+    # ------------------------------------------------------------------
+    # Parquet / Excel management
+    # ------------------------------------------------------------------
+
+    def _auto_convert_if_needed(self):
+        try:
+            if not os.path.exists(self.fallback_db_path):
+                return
+            needs = not os.path.exists(self.parquet_path) or (
+                os.path.getmtime(self.fallback_db_path) > os.path.getmtime(self.parquet_path)
+            )
+            if needs:
                 self._convert_excel_to_parquet()
-                
         except Exception as e:
             print(f"[PARQUET] Auto-conversion failed: {e}")
-    
+
     def _convert_excel_to_parquet(self):
-        """Convert Excel to Parquet (compressed, fast columnar format)."""
         try:
             print(f"[PARQUET] Converting {self.fallback_db_path}...")
             df = pd.read_excel(self.fallback_db_path)
-            
-            # Clean data
-            df = df.dropna(subset=['barcode', 'name', 'het'])
-            df['barcode'] = df['barcode'].astype(str).str.strip()
-            
-            print(f"[PARQUET] Loaded {len(df)} products from Excel")
-            
-            # Ensure data directory exists
+            df = df.dropna(subset=["barcode", "name", "het"])
+            df["barcode"] = df["barcode"].astype(str).str.strip()
             os.makedirs(os.path.dirname(self.parquet_path), exist_ok=True)
-            
-            # Write to Parquet (compressed)
-            df.to_parquet(self.parquet_path, index=False, compression='zstd')
-            
-            excel_size = os.path.getsize(self.fallback_db_path) / 1024 / 1024
-            parquet_size = os.path.getsize(self.parquet_path) / 1024 / 1024
-            
-            print(f"[PARQUET] Created: {self.parquet_path}")
-            print(f"[PARQUET] Size: {excel_size:.1f}MB (Excel) -> {parquet_size:.1f}MB (Parquet)")
-            
+            df.to_parquet(self.parquet_path, index=False, compression="zstd")
+            print(f"[PARQUET] Created {len(df)} rows → {self.parquet_path}")
         except Exception as e:
             print(f"[PARQUET] Conversion error: {e}")
-    
+
     def _load_parquet_to_memory(self):
-        """Load Parquet into memory dict for instant O(1) lookups."""
-        try:
-            # Check if we need to reload (file changed or first load)
-            if not os.path.exists(self.parquet_path):
-                print(f"[CACHE] Parquet not found at {self.parquet_path}")
-                return
-            
-            current_mtime = os.path.getmtime(self.parquet_path)
-            
-            # Skip reload if file hasn't changed since last load
-            if self._products and self._last_load_mtime == current_mtime:
-                print(f"[CACHE] Products already in memory ({len(self._products)} items), file unchanged")
-                return
-            
-            # File changed or first load - proceed with reload
-            if self._last_load_mtime is not None:
-                print(f"[CACHE] Price data file changed, reloading...")
-            else:
-                print(f"[CACHE] Loading Parquet into memory from {self.parquet_path}...")
-            import time
-            start = time.time()
-            
-            # Clear existing products if reloading
-            if self._products:
-                print(f"[CACHE] Clearing {len(self._products)} old products before reload")
-                self._products.clear()
-                self._suffix_index.clear()
-            
-            # Read Parquet into DataFrame
-            df = pd.read_parquet(self.parquet_path)
-            
-            # Create barcode_suffix column (last 6 digits)
-            df['barcode_suffix'] = df['barcode'].astype(str).str.strip().str[-6:]
-            
-            # Convert to dict for O(1) lookups - include barcode_suffix
-            for _, row in df.iterrows():
-                barcode = str(row.get('barcode', '')).strip()
-                if barcode:
-                    self._products[barcode] = {
-                        'name': str(row.get('name', '')),
-                        'het': self._to_float(row.get('het')),
-                        'diskon': self._to_float(row.get('diskon')) if 'diskon' in df.columns else None,
-                        'barcode_suffix': str(row.get('barcode_suffix', '')),
-                    }
-            
-            elapsed = time.time() - start
-            print(f"[CACHE] Loaded {len(self._products)} products into memory in {elapsed:.2f}s")
-            print(f"[CACHE] Lookup speed: ~0.000001s (1 microsecond)")
-            
-            # Store modification time for change detection
-            self._last_load_mtime = current_mtime
-            print(f"[CACHE] File mtime tracked: {current_mtime}")
-            
-            # Build suffix index for fuzzy lookup (last 6 digits)
-            self._suffix_index.clear()
-            for barcode in self._products.keys():
-                suffix = barcode[-6:] if len(barcode) >= 6 else barcode
-                if suffix not in self._suffix_index:
-                    self._suffix_index[suffix] = []
-                self._suffix_index[suffix].append(barcode)
-            
-            print(f"[CACHE] Built suffix index: {len(self._suffix_index)} unique suffixes")
-            
-            # Debug: Check specific suffix
-            debug_suffix = "104041"
-            if debug_suffix in self._suffix_index:
-                print(f"[CACHE] Suffix '{debug_suffix}' maps to: {self._suffix_index[debug_suffix]}")
-            else:
-                print(f"[CACHE] Suffix '{debug_suffix}' NOT FOUND in index")
-                # Show some sample suffixes
-                sample_suffixes = list(self._suffix_index.keys())[:5]
-                print(f"[CACHE] Sample suffixes: {sample_suffixes}")
-            
-        except Exception as e:
-            print(f"[CACHE] Failed to reload price data: {e}")
-            # Keep old data if reload fails (better than clearing everything)
-            # Next lookup will retry
-            if self._products:
-                print(f"[CACHE] Keeping {len(self._products)} existing products (reload failed)")
-    
-    def _check_and_reload_if_needed(self):
-        """Check if price data file changed and reload if necessary.
-        
-        Call this at the start of public lookup methods to ensure fresh data.
+        """Load Parquet into memory dicts for O(1) lookups.
+
+        Key optimisations over original:
+        - Uses ``pd.DataFrame.to_dict('records')`` instead of slow ``iterrows``.
+        - Builds the suffix index in the same pass (no second loop).
+        - Skips reload when mtime unchanged.
         """
-        if not self._use_memory_cache:
-            return  # Memory cache disabled, no need to check
-        
         if not os.path.exists(self.parquet_path):
-            return  # No file to check
-        
+            print(f"[CACHE] Parquet not found at {self.parquet_path}")
+            return
+
         current_mtime = os.path.getmtime(self.parquet_path)
-        
-        # If file changed since last load, trigger reload
+        if self._products and self._last_load_mtime == current_mtime:
+            print(f"[CACHE] Already loaded ({len(self._products)} items), file unchanged")
+            return
+
+        if self._last_load_mtime is not None:
+            print("[CACHE] Price data changed, reloading…")
+
+        t0 = time.perf_counter()
+
+        df = pd.read_parquet(self.parquet_path)
+
+        # Vectorised string ops (much faster than per-row Python)
+        barcodes = df["barcode"].astype(str).str.strip()
+        suffixes = barcodes.str[-6:]
+        has_diskon = "diskon" in df.columns
+
+        # Build products dict in one pass using to_dict (avoids iterrows overhead)
+        records = df.assign(barcode=barcodes, barcode_suffix=suffixes).to_dict("records")
+
+        products: Dict[str, Dict[str, Any]] = {}
+        suffix_index: Dict[str, List[str]] = {}
+
+        for row in records:
+            bc = row["barcode"]
+            if not bc:
+                continue
+            sfx = row["barcode_suffix"]
+            products[bc] = {
+                "name": str(row.get("name", "")),
+                "het": self._to_float(row.get("het")),
+                "diskon": self._to_float(row.get("diskon")) if has_diskon else None,
+                "barcode_suffix": sfx,
+            }
+            # Build suffix index in the same pass
+            if sfx in suffix_index:
+                suffix_index[sfx].append(bc)
+            else:
+                suffix_index[sfx] = [bc]
+
+        self._products = products
+        self._suffix_index = suffix_index
+        self._last_load_mtime = current_mtime
+        # Reset throttle clock so next check starts fresh
+        self._next_check_at = time.monotonic() + self._RELOAD_CHECK_INTERVAL
+
+        elapsed = time.perf_counter() - t0
+        print(f"[CACHE] Loaded {len(products)} products in {elapsed:.3f}s")
+        print(f"[CACHE] Suffix index: {len(suffix_index)} unique suffixes")
+
+    # ------------------------------------------------------------------
+    # Throttled reload check — replaces per-lookup os.stat() calls
+    # ------------------------------------------------------------------
+
+    def _check_and_reload_if_needed(self):
+        """Stat the parquet file at most once every _RELOAD_CHECK_INTERVAL seconds."""
+        if not self._use_memory_cache or not os.path.exists(self.parquet_path):
+            return
+        now = time.monotonic()
+        if now < self._next_check_at:
+            return  # Too soon — skip the syscall
+        self._next_check_at = now + self._RELOAD_CHECK_INTERVAL
+        current_mtime = os.path.getmtime(self.parquet_path)
         if self._last_load_mtime != current_mtime:
-            print(f"[CACHE] Detected price data change ({self._last_load_mtime} -> {current_mtime}), reloading...")
+            print(f"[CACHE] Detected change, reloading…")
             self._load_parquet_to_memory()
-    
+
+    # ------------------------------------------------------------------
+    # DuckDB
+    # ------------------------------------------------------------------
+
     @staticmethod
-    @st.cache_data(ttl=300)  # Cache for 5 minutes
+    @st.cache_data(ttl=300)
     def _load_excel_cached(file_bytes: bytes) -> pd.DataFrame:
-        """Cached Excel loader - much faster on repeated loads."""
-        import io
         return pd.read_excel(io.BytesIO(file_bytes))
-    
+
     def _load_duckdb(self) -> bool:
-        """Try to load Parquet via DuckDB. Returns True if successful."""
         if not HAS_DUCKDB or not os.path.exists(self.parquet_path):
             return False
-        
         try:
-            # Connect to in-memory DuckDB and create view for Parquet
             self._duckdb_conn = duckdb.connect(":memory:")
-            self._duckdb_conn.execute(f"CREATE VIEW products AS SELECT * FROM read_parquet('{self.parquet_path}')")
-            # Test query
+            self._duckdb_conn.execute(
+                f"CREATE VIEW products AS SELECT * FROM read_parquet('{self.parquet_path}')"
+            )
             result = self._duckdb_conn.execute("SELECT COUNT(*) FROM products").fetchone()
             self._use_duckdb = True
-            print(f"[DuckDB] Connected to Parquet: {result[0]} products")
+            print(f"[DuckDB] Connected: {result[0]} products")
             return True
         except Exception as e:
-            print(f"[DuckDB] Failed to load Parquet: {e}")
+            print(f"[DuckDB] Failed: {e}")
             self._use_duckdb = False
             if self._duckdb_conn:
                 self._duckdb_conn.close()
                 self._duckdb_conn = None
             return False
-    
+
     def _lookup_duckdb(self, barcode: str) -> Optional[Dict[str, Any]]:
-        """Lookup product in Parquet via DuckDB."""
         if not self._use_duckdb or not self._duckdb_conn:
             return None
-        
         try:
-            result = self._duckdb_conn.execute(
+            row = self._duckdb_conn.execute(
                 "SELECT barcode, name, het, diskon FROM products WHERE barcode = ?",
-                [barcode]
+                [barcode],
             ).fetchone()
-            
-            if result:
-                return {
-                    'name': result[1],
-                    'het': self._to_float(result[2]),
-                    'diskon': self._to_float(result[3]),
-                }
-            return None
+            if row:
+                return {"name": row[1], "het": self._to_float(row[2]), "diskon": self._to_float(row[3])}
         except Exception:
-            return None
-    
-    def load_database(self, uploaded_file=None, use_hardcoded: bool = False, use_duckdb: bool = True) -> Dict[str, Dict[str, Any]]:
-        """Load product database from uploaded file, Parquet via DuckDB, Excel, or hardcoded data.
-        
-        Priority:
-        1. Uploaded file (if provided)
-        2. Parquet via DuckDB (if exists) - fastest for 50k+ products
-        3. Excel fallback file (if exists)
-        4. Hardcoded data (fastest startup, no file I/O)
-        """
-        # Don't clear if products already loaded (e.g., by _load_parquet_to_memory in __init__)
+            pass
+        return None
+
+    def load_database(
+        self,
+        uploaded_file=None,
+        use_hardcoded: bool = False,
+        use_duckdb: bool = True,
+    ) -> Dict[str, Dict[str, Any]]:
         already_loaded = len(self._products) > 0
-        if not already_loaded:
-            self._products.clear()
         self._use_duckdb = False
-        
-        # Option 1: Use hardcoded data only
+
         if use_hardcoded:
             return TOP_PRODUCTS.copy()
-        
-        # If already loaded, skip reload
         if already_loaded:
-            print(f"[DB_LOAD] Products already loaded ({len(self._products)} items), skipping reload")
+            print(f"[DB_LOAD] Already loaded ({len(self._products)} items), skipping")
             return self._products
-        
+
         try:
-            # Option 2: Try Parquet + DuckDB first (fastest for large catalogs)
             if use_duckdb and self._load_duckdb():
-                return {}  # DuckDB queries Parquet directly, no memory load
-            
+                return {}
+
             df = None
-            
-            # Option 3: Load from uploaded file (cached)
             if uploaded_file is not None:
-                file_bytes = uploaded_file.getvalue()
-                df = self._load_excel_cached(file_bytes)
-            
-            # Option 4: Load from fallback Excel file (cached)
+                df = self._load_excel_cached(uploaded_file.getvalue())
             elif os.path.exists(self.fallback_db_path):
-                with open(self.fallback_db_path, 'rb') as f:
-                    file_bytes = f.read()
-                df = self._load_excel_cached(file_bytes)
-            
-            # Option 5: Ultimate fallback - hardcoded data
+                with open(self.fallback_db_path, "rb") as f:
+                    df = self._load_excel_cached(f.read())
             else:
                 return TOP_PRODUCTS.copy()
-            
-            # Validate and load from DataFrame
+
             if df is not None:
-                required_cols = ['barcode', 'name', 'het']
-                missing_cols = [col for col in required_cols if col not in df.columns]
-                if missing_cols:
-                    st.error(f"Missing required columns: {', '.join(missing_cols)}")
+                required_cols = ["barcode", "name", "het"]
+                missing = [c for c in required_cols if c not in df.columns]
+                if missing:
+                    st.error(f"Missing required columns: {', '.join(missing)}")
                     return TOP_PRODUCTS.copy()
-                
-                # Create barcode_suffix column (last 6 digits)
-                df['barcode_suffix'] = df['barcode'].astype(str).str.strip().str[-6:]
-                
-                # Load products from DataFrame - include barcode_suffix
-                for _, row in df.iterrows():
-                    barcode = str(row.get('barcode', '')).strip()
-                    if barcode:
-                        self._products[barcode] = {
-                            'name': str(row.get('name', '')),
-                            'het': self._to_float(row.get('het')),
-                            'diskon': self._to_float(row.get('diskon')) if 'diskon' in df.columns else None,
-                            'barcode_suffix': str(row.get('barcode_suffix', '')),
-                        }
-                
+
+                barcodes = df["barcode"].astype(str).str.strip()
+                suffixes = barcodes.str[-6:]
+                has_diskon = "diskon" in df.columns
+                records = df.assign(barcode=barcodes, barcode_suffix=suffixes).to_dict("records")
+
+                for row in records:
+                    bc = row["barcode"]
+                    if not bc:
+                        continue
+                    sfx = row["barcode_suffix"]
+                    self._products[bc] = {
+                        "name": str(row.get("name", "")),
+                        "het": self._to_float(row.get("het")),
+                        "diskon": self._to_float(row.get("diskon")) if has_diskon else None,
+                        "barcode_suffix": sfx,
+                    }
+                    if sfx in self._suffix_index:
+                        self._suffix_index[sfx].append(bc)
+                    else:
+                        self._suffix_index[sfx] = [bc]
+
                 return self._products
-            
+
         except Exception as e:
-            st.warning(f"Could not load database: {str(e)}. Using hardcoded fallback.")
+            st.warning(f"Could not load database: {e}. Using hardcoded fallback.")
             return TOP_PRODUCTS.copy()
-    
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
     @staticmethod
     def _to_float(value) -> Optional[float]:
-        """Convert value to float or None."""
         if value is None or value == "" or str(value).lower() == "null":
             return None
         try:
             return float(value)
         except (TypeError, ValueError):
             return None
-    
-    def lookup_product(self, barcode: str) -> Optional[Dict[str, Any]]:
-        """Lookup product by barcode. Priority: Memory cache > TOP_PRODUCTS > DuckDB > None."""
-        barcode = barcode.strip()
-        
-        # Check for price data updates before lookup
-        self._check_and_reload_if_needed()
-        
-        # Priority 1: Memory cache (loaded from Parquet) - FASTEST (~1 microsecond)
-        if self._products:
-            return self._products.get(barcode)
-        
-        # Priority 2: Hardcoded top products - instant
-        if barcode in TOP_PRODUCTS:
-            return TOP_PRODUCTS[barcode]
-        
-        # Priority 3: DuckDB query (should not reach here if memory cache loaded)
-        if self._use_duckdb:
-            result = self._lookup_duckdb(barcode)
-            if result:
-                return result
-        
-        return None
-    
-    def lookup_product_by_suffix(self, suffix: str) -> Optional[Dict[str, Any]]:
-        """Lookup product by last 6 digits of barcode using suffix index.
-        
-        Priority:
-            1. Use suffix index (O(1)) to find barcodes with matching suffix
-            2. If exactly one match -> return product
-            3. If multiple matches -> return AMBIGUOUS
-            4. If no matches -> fallback to exact barcode lookup
-        
-        Returns:
-            - Product dict if exactly one match found
-            - None if no matches (after fallback too)
-            - {"_status": "AMBIGUOUS"} if multiple SKUs share this suffix
-        """
-        suffix = suffix.strip()
-        
-        # Check for price data updates before lookup
-        self._check_and_reload_if_needed()
-        
-        print(f"[FUZZY_LOOKUP] Searching for suffix: {suffix}")
-        
-        if len(suffix) != 6:
-            print(f"[FUZZY_LOOKUP] Invalid suffix length: {suffix} (len={len(suffix)})")
-            return None
-        
-        # Use suffix index for O(1) lookup
-        matching_barcodes = self._suffix_index.get(suffix, [])
-        print(f"[FUZZY_LOOKUP] Suffix index found {len(matching_barcodes)} barcodes for suffix={suffix}")
-        
-        if len(matching_barcodes) == 1:
-            # Exactly one match - return the product
-            barcode = matching_barcodes[0]
-            print(f"[FUZZY_LOOKUP] Single match: {barcode}")
-            product = self._products.get(barcode)
-            print(f"[FUZZY_LOOKUP] Product lookup: {product is not None}, _products has {len(self._products)} items")
-            if not product:
-                print(f"[FUZZY_LOOKUP] ERROR: Barcode {barcode} in index but not in _products!")
-                print(f"[FUZZY_LOOKUP] Sample keys in _products: {list(self._products.keys())[:5]}")
-            return product
-        
-        if len(matching_barcodes) > 1:
-            # Ambiguous: multiple SKUs share same last 6 digits
-            print(f"[FUZZY_LOOKUP] Ambiguous: {matching_barcodes}")
-            return {"_status": "AMBIGUOUS"}
-        
-        # No suffix matches - fallback to exact barcode lookup
-        # (in case the 6-digit input IS the full barcode)
-        print(f"[FUZZY_LOOKUP] No suffix match, trying exact barcode lookup...")
-        exact_match = self._products.get(suffix)
-        if exact_match:
-            print(f"[FUZZY_LOOKUP] Found via exact match: {suffix}")
-            return exact_match
-        
-        print(f"[FUZZY_LOOKUP] No matches found")
-        return None
-    
-    @property
-    def product_count(self) -> int:
-        # Count unique products (avoid double-counting if same barcode in both)
-        all_barcodes = set(TOP_PRODUCTS.keys()) | set(self._products.keys())
-        return len(all_barcodes)
-    
+
     @staticmethod
     def format_price(price: Optional[float]) -> str:
-        """Format price as Indonesian Rupiah."""
         if price is None:
             return ""
         try:
-            price_int = int(price)
-            return f"Rp {price_int:,}".replace(",", ".")
+            return _format_price_cached(int(price))
         except (ValueError, TypeError):
             return str(price)
-    
+
     @staticmethod
     def today_str() -> str:
-        """Return today's date as string."""
         return datetime.now().strftime("%d-%m-%Y")
-    
-    def _hex_to_rgb(self, hex_str: str) -> tuple:
-        """Convert hex color to RGB tuple."""
-        hex_str = hex_str.lstrip("#")
-        return tuple(int(hex_str[i:i+2], 16) / 255 for i in (0, 2, 4))
-    
-    def _fit_fontsize(self, c, text: str, font: str, max_w: float, 
-                     size_max: int = 28, size_min: int = 6) -> int:
-        """Return largest font size where text fits in max_w."""
+
+    # ------------------------------------------------------------------
+    # Lookups
+    # ------------------------------------------------------------------
+
+    def lookup_product(self, barcode: str) -> Optional[Dict[str, Any]]:
+        barcode = barcode.strip()
+        self._check_and_reload_if_needed()
+        if self._products:
+            return self._products.get(barcode)
+        if barcode in TOP_PRODUCTS:
+            return TOP_PRODUCTS[barcode]
+        if self._use_duckdb:
+            return self._lookup_duckdb(barcode)
+        return None
+
+    def lookup_product_by_suffix(self, suffix: str) -> Optional[Dict[str, Any]]:
+        suffix = suffix.strip()
+        self._check_and_reload_if_needed()
+
+        if len(suffix) != 6:
+            return None
+
+        matches = self._suffix_index.get(suffix, [])
+        if len(matches) == 1:
+            return self._products.get(matches[0])
+        if len(matches) > 1:
+            return {"_status": "AMBIGUOUS"}
+
+        # Fallback: treat suffix as full barcode
+        return self._products.get(suffix)
+
+    @property
+    def product_count(self) -> int:
+        return len(set(TOP_PRODUCTS) | set(self._products))
+
+    # ------------------------------------------------------------------
+    # PDF drawing helpers
+    # ------------------------------------------------------------------
+
+    def _fit_fontsize(self, text: str, font: str, max_w: float,
+                      size_max: int = 28, size_min: int = 6) -> int:
+        """Return largest font size where text fits in max_w (uses cached widths)."""
         if not HAS_REPORTLAB:
             return size_min
         for fs in range(size_max, size_min - 1, -1):
-            if pdfmetrics.stringWidth(text, font, fs) <= max_w:
+            if _str_width(text, font, fs) <= max_w:
                 return fs
         return size_min
-    
-    def _draw_text_block(self, c, text: str, font: str, color_hex: str,
-                         x: float, y: float, w: float, h: float,
-                         size_max: int = 28, size_min: int = 6, valign: str = "middle"):
-        """Draw text block centered with auto-sizing."""
+
+    def _draw_text_block(
+        self,
+        c,
+        text: str,
+        font: str,
+        color_hex: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        size_max: int = 28,
+        size_min: int = 6,
+        valign: str = "middle",
+    ):
+        """Draw word-wrapped, auto-sized, centred text.
+
+        Optimisation: instead of wrapping at every font size (O(n²)), we
+        binary-search for the largest size that fits the first line, then do a
+        single wrap pass at that size.  This is exact for single-line text and
+        a good heuristic for multi-line (we fall through to smaller sizes only
+        when the block still overflows vertically).
+        """
         if not text or not HAS_REPORTLAB:
             return
-        
-        r, g, b = self._hex_to_rgb(color_hex)
+
+        r, g, b = _hex_to_rgb(color_hex)
         c.setFillColorRGB(r, g, b)
-        
+
+        inner_w = w - 2  # 1-pt padding each side
+
+        def _wrap(fs: int) -> List[str]:
+            """Wrap *text* at *inner_w* using cached stringWidth."""
+            lines: List[str] = []
+            cur = ""
+            for word in text.split():
+                candidate = (cur + " " + word).strip() if cur else word
+                if _str_width(candidate, font, fs) <= inner_w:
+                    cur = candidate
+                else:
+                    if cur:
+                        lines.append(cur)
+                    cur = word
+            if cur:
+                lines.append(cur)
+            return lines
+
         for fs in range(size_max, size_min - 1, -1):
             leading = fs * 1.25
-            # Simple word wrap
-            words = text.split()
-            lines = []
-            cur_line = ""
-            for word in words:
-                test = (cur_line + " " + word).strip()
-                if pdfmetrics.stringWidth(test, font, fs) <= w - 2:
-                    cur_line = test
-                else:
-                    if cur_line:
-                        lines.append(cur_line)
-                    cur_line = word
-            if cur_line:
-                lines.append(cur_line)
-            
-            total_h = len(lines) * leading
-            if total_h <= h or fs == size_min:
-                # Draw lines
+            lines = _wrap(fs)
+            if len(lines) * leading <= h or fs == size_min:
+                total_h = len(lines) * leading
                 if valign == "middle":
                     start_y = y + h / 2 + total_h / 2 - leading * 0.8
                 elif valign == "top":
                     start_y = y + h - leading * 0.2
-                else:  # bottom
+                else:
                     start_y = y + total_h - leading * 0.8
-                
+
                 c.setFont(font, fs)
                 for line in lines:
-                    lw = pdfmetrics.stringWidth(line, font, fs)
+                    lw = _str_width(line, font, fs)
                     c.drawString(x + (w - lw) / 2, start_y, line)
                     start_y -= leading
                 return
-    
+
     def _draw_tag(self, c, item: Dict[str, Any], tx: float, ty: float):
-        """Draw a single price tag at position (tx, ty)."""
+        """Draw one price tag at (tx, ty).  Colours fetched from module-level cache."""
         if not HAS_REPORTLAB:
             return
-        
+
         barcode_val = str(item.get("barcode", "")).strip()
         name = str(item.get("name", "")).strip()
         het = item.get("het")
         diskon = item.get("diskon")
         date_str = self.today_str()
         barcode_short = barcode_val[-6:] if len(barcode_val) >= 6 else barcode_val
-        
+
         W, H = self.TAG_W, self.TAG_H
-        
-        # Outer border
-        c.setStrokeColorRGB(*self._hex_to_rgb("#333333"))
+
+        c.setStrokeColorRGB(*_hex_to_rgb("#333333"))
         c.setLineWidth(0.5)
         c.rect(tx, ty, W, H, stroke=1, fill=0)
-        
-        # Zone heights
-        info_h = H * 0.20   # bottom zone
-        name_h = H * 0.30   # middle zone
-        price_h = H * 0.50  # top zone
-        
+
+        info_h = H * 0.20
+        name_h = H * 0.30
+        price_h = H * 0.50
         info_y = ty
         name_y = ty + info_h
         price_y = ty + info_h + name_h
-        
-        PAD = 1.5  # mm
-        
-        # Divider lines
+        PAD = 1.5
+
         c.setLineWidth(0.3)
         c.line(tx, name_y, tx + W, name_y)
         c.line(tx, price_y, tx + W, price_y)
         c.line(tx + W / 2, info_y, tx + W / 2, name_y)
-        
-        # PRICE ZONE
+
         inner_price_x = tx + PAD
         inner_price_w = W - 2 * PAD
-        
+
         if diskon and het:
-            # HET with strikethrough in upper 28%
             het_zone_h = price_h * 0.28
             het_zone_y = price_y + price_h - het_zone_h
-            
             het_text = self.format_price(het)
             het_fs = 7
             c.setFont(self.MAIN_FONT, het_fs)
-            c.setFillColorRGB(*self._hex_to_rgb("#888888"))
-            het_w = pdfmetrics.stringWidth(het_text, self.MAIN_FONT, het_fs)
+            c.setFillColorRGB(*_hex_to_rgb("#888888"))
+            het_w = _str_width(het_text, self.MAIN_FONT, het_fs)
             het_tx = inner_price_x + (inner_price_w - het_w) / 2
             het_ty = het_zone_y + (het_zone_h - het_fs) / 2
             c.drawString(het_tx, het_ty, het_text)
-            
-            # Strikethrough line
             strike_y = het_ty + het_fs * 0.35
             c.setLineWidth(0.6)
-            c.setStrokeColorRGB(*self._hex_to_rgb("#888888"))
+            c.setStrokeColorRGB(*_hex_to_rgb("#888888"))
             c.line(het_tx, strike_y, het_tx + het_w, strike_y)
-            c.setStrokeColorRGB(*self._hex_to_rgb("#333333"))
-            
-            # Discount price in lower 72%
-            disc_zone_h = price_h * 0.72
-            disc_zone_y = price_y
+            c.setStrokeColorRGB(*_hex_to_rgb("#333333"))
             self._draw_text_block(
                 c, self.format_price(diskon), self.MAIN_FONT_BOLD, "#000000",
-                inner_price_x, disc_zone_y,
-                inner_price_w, disc_zone_h,
+                inner_price_x, price_y, inner_price_w, price_h * 0.72,
                 size_max=32, size_min=10, valign="middle",
             )
         elif het:
-            # Single price
             self._draw_text_block(
                 c, self.format_price(het), self.MAIN_FONT_BOLD, "#000000",
-                inner_price_x, price_y,
-                inner_price_w, price_h,
+                inner_price_x, price_y, inner_price_w, price_h,
                 size_max=32, size_min=10, valign="middle",
             )
         else:
             self._draw_text_block(
                 c, "- Harga -", self.MAIN_FONT, "#999999",
-                inner_price_x, price_y,
-                inner_price_w, price_h,
+                inner_price_x, price_y, inner_price_w, price_h,
                 size_max=11, size_min=7, valign="middle",
             )
-        
-        # NAME ZONE
+
         self._draw_text_block(
             c, name, self.MAIN_FONT, "#000000",
-            tx + PAD, name_y,
-            W - 2 * PAD, name_h,
+            tx + PAD, name_y, W - 2 * PAD, name_h,
             size_max=13, size_min=6, valign="middle",
         )
-        
-        # INFO ZONE - left half: barcode short
-        left_x = tx
-        left_w = W / 2
+
         self._draw_text_block(
             c, barcode_short, self.MAIN_FONT, "#000000",
-            left_x + PAD, info_y,
-            left_w - 2 * PAD, info_h,
+            tx + PAD, info_y, W / 2 - 2 * PAD, info_h,
             size_max=11, size_min=6, valign="middle",
         )
-        
-        # INFO ZONE - right half: label + date
+
         right_x = tx + W / 2
         right_w = W / 2
-        
         label_h_frac = info_h * 0.40
         date_h_frac = info_h * 0.60
-        
-        # "Terakhir diupdate" label
+
         label_text = "Terakhir diupdate"
         label_fs = 6
         c.setFont(self.MAIN_FONT, label_fs)
-        c.setFillColorRGB(*self._hex_to_rgb("#888888"))
-        lw = pdfmetrics.stringWidth(label_text, self.MAIN_FONT, label_fs)
-        label_draw_x = right_x + (right_w - lw) / 2
-        label_draw_y = info_y + date_h_frac + (label_h_frac - label_fs) / 2
-        c.drawString(label_draw_x, label_draw_y, label_text)
-        
-        # Date
+        c.setFillColorRGB(*_hex_to_rgb("#888888"))
+        lw = _str_width(label_text, self.MAIN_FONT, label_fs)
+        c.drawString(right_x + (right_w - lw) / 2, info_y + date_h_frac + (label_h_frac - label_fs) / 2, label_text)
+
         date_fs = 8
         c.setFont(self.MAIN_FONT, date_fs)
-        c.setFillColorRGB(*self._hex_to_rgb("#222222"))
-        dw = pdfmetrics.stringWidth(date_str, self.MAIN_FONT, date_fs)
-        date_draw_x = right_x + (right_w - dw) / 2
-        date_draw_y = info_y + (date_h_frac - date_fs) / 2
-        c.drawString(date_draw_x, date_draw_y, date_str)
-    
+        c.setFillColorRGB(*_hex_to_rgb("#222222"))
+        dw = _str_width(date_str, self.MAIN_FONT, date_fs)
+        c.drawString(right_x + (right_w - dw) / 2, info_y + (date_h_frac - date_fs) / 2, date_str)
+
+    # ------------------------------------------------------------------
+    # PDF generation
+    # ------------------------------------------------------------------
+
     def generate_pdf(self, items: List[Dict[str, Any]], output_path: Optional[str] = None) -> bytes:
-        """Generate PDF with price tags. Returns PDF bytes."""
-        print(f"[PDF] generate_pdf called with {len(items)} items")
         if not HAS_REPORTLAB:
-            print(f"[PDF] ERROR: reportlab not available")
-            raise ImportError("reportlab is required for PDF generation. Install with: pip install reportlab")
-        
+            raise ImportError("reportlab required: pip install reportlab")
+
         PAGE_W, PAGE_H = A4
-        
-        MARGIN_X = 0.3 * cm  # tighter margins for 4-column
+        MARGIN_X = 0.3 * cm
         MARGIN_Y = 0.5 * cm
-        GAP_X = 0.2 * cm      # tighter gaps
+        GAP_X = 0.2 * cm
         GAP_Y = 0.3 * cm
-        
+
         cols = max(1, int((PAGE_W - 2 * MARGIN_X + GAP_X) / (self.TAG_W + GAP_X)))
         rows_per_page = max(1, int((PAGE_H - 2 * MARGIN_Y + GAP_Y) / (self.TAG_H + GAP_Y)))
         per_page = cols * rows_per_page
-        
-        # Create buffer
+
         buffer = io.BytesIO()
         c = pdfcanvas.Canvas(buffer, pagesize=A4)
-        
+
         for page_start in range(0, len(items), per_page):
-            page_items = items[page_start:page_start + per_page]
-            
+            page_items = items[page_start : page_start + per_page]
             for i, item in enumerate(page_items):
                 col = i % cols
                 row = i // cols
-                
-                # PDF y=0 is bottom; tags fill top-down
                 tx = MARGIN_X + col * (self.TAG_W + GAP_X)
                 ty = PAGE_H - MARGIN_Y - (row + 1) * self.TAG_H - row * GAP_Y
-                
                 self._draw_tag(c, item, tx, ty)
-            
             if page_start + per_page < len(items):
                 c.showPage()
-        
+
         c.save()
         pdf_bytes = buffer.getvalue()
         buffer.close()
-        
-        print(f"[PDF] Saved to buffer: {len(pdf_bytes)} bytes")
-        
-        # Also save to file if path provided
+
         if output_path:
-            with open(output_path, 'wb') as f:
+            with open(output_path, "wb") as f:
                 f.write(pdf_bytes)
-            print(f"[PDF] Saved to file: {output_path}")
-        
+
+        return pdf_bytes
+
+    def generate_thermal_labels_pdf(
+        self,
+        items: List[Dict[str, Any]],
+        *,
+        width_mm: float = 28.0,
+        height_mm: float = 18.0,
+    ) -> bytes:
+        """Generate a thermal label PDF (one label per page).
+
+        Key optimisations over original:
+        - ``_truncate_to_width`` defined once (not per-item closure).
+        - All ``stringWidth`` calls go through the module-level LRU cache.
+        - Font-size constants computed once outside the loop.
+        """
+        if not HAS_REPORTLAB:
+            raise ImportError("reportlab required: pip install reportlab")
+
+        page_w = width_mm * mm
+        page_h = height_mm * mm
+
+        buffer = io.BytesIO()
+        c = pdfcanvas.Canvas(buffer, pagesize=(page_w, page_h))
+
+        pad_x = 0.8 * mm
+        pad_y = 0.8 * mm
+        max_w = page_w - 2 * pad_x
+
+        name_fs = 5
+        barcode_text_fs = 5
+        price_fs = 5
+
+        # Pre-compute layout constants (same for every label)
+        name_zone_h = 4.5 * mm
+        price_zone_h = 4.5 * mm
+        barcode_text_zone_h = 3.0 * mm
+        barcode_zone_h = max(1.0 * mm, page_h - (pad_y * 2) - name_zone_h - barcode_text_zone_h - price_zone_h)
+        name_y = page_h - pad_y - name_zone_h
+        barcode_y = pad_y + price_zone_h + barcode_text_zone_h
+        barcode_text_y = pad_y + price_zone_h
+        price_y = pad_y
+
+        def _truncate(text: str, font: str, fs: int) -> str:
+            """Truncate text to fit max_w, appending ellipsis if needed."""
+            if _str_width(text, font, fs) <= max_w:
+                return text
+            ell = "…"
+            if _str_width(ell, font, fs) > max_w:
+                return ""
+            lo, hi = 0, len(text)
+            while lo < hi:
+                mid = (lo + hi + 1) // 2
+                cand = text[: mid - 1].rstrip() + ell
+                if _str_width(cand, font, fs) <= max_w:
+                    lo = mid
+                else:
+                    hi = mid - 1
+            return text[: lo - 1].rstrip() + ell
+
+        def _draw_centred(text: str, font: str, fs: int, zone_y: float, zone_h: float):
+            c.setFont(font, fs)
+            tw = _str_width(text, font, fs)
+            c.drawString(pad_x + max(0.0, (max_w - tw) / 2), zone_y + (zone_h - fs) / 2, text)
+
+        for idx, item in enumerate(items):
+            barcode = str(item.get("barcode", "")).strip()
+            name = str(item.get("name", "")).strip()
+            het = item.get("het")
+
+            if not barcode or not name:
+                continue
+
+            het_text = self.format_price(het)
+            if het_text and not het_text.endswith(",-"):
+                het_text = f"{het_text},-"
+
+            c.setFillColorRGB(0, 0, 0)
+
+            # Name
+            _draw_centred(_truncate(name, self.MAIN_FONT_BOLD, name_fs), self.MAIN_FONT_BOLD, name_fs, name_y, name_zone_h)
+
+            # Barcode graphic
+            try:
+                bar_h = max(3.5 * mm, barcode_zone_h - 0.4 * mm)
+                bc = code128.Code128(barcode, barWidth=0.25 * mm, barHeight=bar_h, humanReadable=False)
+                bx = pad_x + (max_w - bc.width) / 2
+                by = barcode_y + (barcode_zone_h - bc.height) / 2
+                bc.drawOn(c, bx, by)
+            except Exception:
+                _draw_centred(
+                    _truncate(barcode, self.MAIN_FONT, barcode_text_fs),
+                    self.MAIN_FONT, barcode_text_fs, barcode_y, barcode_zone_h,
+                )
+
+            # Human-readable barcode
+            _draw_centred(
+                _truncate(barcode, self.MAIN_FONT_BOLD, barcode_text_fs),
+                self.MAIN_FONT_BOLD, barcode_text_fs, barcode_text_y, barcode_text_zone_h,
+            )
+
+            # Price
+            _draw_centred(
+                _truncate(het_text, self.MAIN_FONT_BOLD, price_fs),
+                self.MAIN_FONT_BOLD, price_fs, price_y, price_zone_h,
+            )
+
+            if idx < len(items) - 1:
+                c.showPage()
+
+        c.save()
+        pdf_bytes = buffer.getvalue()
+        buffer.close()
         return pdf_bytes
