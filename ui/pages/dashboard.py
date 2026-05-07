@@ -82,8 +82,8 @@ def render_dashboard_page():
     """Render dashboard page content backed by live Odoo data."""
 
     st.title("Dashboard")
-    st.markdown("### NK Dashboard v0.6.0")
-    st.caption("Sudah nyambung ke Odoo DB! 😸")
+    st.markdown("### NK Dashboard v0.7.0")
+    st.caption("Ada internal tool untuk Stok Opnam! 😸")
 
     now = datetime.now(WIB).replace(microsecond=0)
     default_start_dt = (now - timedelta(days=1))
