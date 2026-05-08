@@ -95,7 +95,7 @@ def get_location_by_complete_name(complete_name: str) -> Optional[OdooLocation]:
 def list_users(limit: int = 200) -> List[OdooUser]:
     rows = connection_manager.search_read(
         model_name="res.users",
-        domain=[("active", "=", True)],
+        domain=[("active", "=", True), ("share", "=", False)],
         fields=["name"],
         order="name asc",
         limit=limit,
