@@ -4,8 +4,6 @@ import streamlit as st
 import pandas as pd
 import math
 import base64
-import json
-import os
 from datetime import datetime
 from logic.price_tag_service import PriceTagService
 from utils.persistence import save_session, restore_session, clear_session, has_saved_session
@@ -67,10 +65,7 @@ class PriceTagPage:
             st.session_state.thermal_pdf_bytes = None
         if 'thermal_rotate' not in st.session_state:
             st.session_state.thermal_rotate = False
-
-        if 'qz_printer_name' not in st.session_state:
-            st.session_state.qz_printer_name = "XP-DP4601B"
-        
+ 
         # Try to restore from localStorage on first load
         if not st.session_state.price_tag_restored:
             restored_items = restore_session()
@@ -824,57 +819,6 @@ class PriceTagPage:
         except Exception as e:
             st.error(f"Gagal membuat PDF thermal: {e}")
 
-    def _build_tspl_jobs(self, source_lines: list[dict]) -> list[str]:
-        items = self._build_thermal_items(source_lines)
-        if not items:
-            return []
-
-        def esc(s: str) -> str:
-            return (s or "").replace('"', "'")
-
-        jobs: list[str] = []
-        for item in items:
-            barcode = str(item.get("barcode") or "").strip()
-            name = str(item.get("name") or "").strip()
-            het = item.get("het")
-            if not barcode or not name:
-                continue
-
-            het_text = self.service.format_price(het)
-            if het_text and not het_text.endswith(",-"):
-                het_text = f"{het_text},-"
-
-            tspl = "\n".join(
-                [
-                    "SIZE 28 mm, 18 mm",
-                    "GAP 2 mm, 0 mm",
-                    "DIRECTION 1",
-                    "CLS",
-                    f'TEXT 24,10,"0",0,1,1,"{esc(name)}"',
-                    f'BARCODE 20,40,"128",50,1,0,2,2,"{esc(barcode)}"',
-                    f'TEXT 90,98,"0",0,1,1,"{esc(barcode)}"',
-                    f'TEXT 60,125,"0",0,2,2,"{esc(het_text)}"',
-                    "PRINT 1,1",
-                ]
-            )
-            jobs.append(tspl)
-
-        return jobs
-
-    def _qz_get_secrets(self) -> tuple[str | None, str | None]:
-        cert = None
-        private_key = None
-        try:
-            cert = st.secrets.get("QZ_CERT")
-            private_key = st.secrets.get("QZ_PRIVATE_KEY")
-        except Exception:
-            pass
-        if not cert:
-            cert = os.environ.get("QZ_CERT")
-        if not private_key:
-            private_key = os.environ.get("QZ_PRIVATE_KEY")
-        return cert, private_key
-
     def render_thermal_section(self):
         st.subheader("Thermal Label Generator (18mm x 28mm)")
 
@@ -912,34 +856,6 @@ class PriceTagPage:
                 if st.button("Generate Thermal PDF (Vendor Bill)", type="primary"):
                     selected = [r for r in st.session_state.thermal_lines if r.get("Print")]
                     self._generate_thermal_pdf(selected)
-
-                st.text_input("QZ Printer Name", key="qz_printer_name")
-                if st.button("🖨️ Print via QZ Tray (TSPL)", type="secondary"):
-                    selected = [r for r in st.session_state.thermal_lines if r.get("Print")]
-                    jobs = self._build_tspl_jobs(selected)
-                    if not jobs:
-                        st.warning("Tidak ada item untuk dicetak")
-                    else:
-                        cert, private_key = self._qz_get_secrets()
-                        if not cert or not private_key:
-                            st.error("QZ secrets missing. Set QZ_CERT and QZ_PRIVATE_KEY in st.secrets or env.")
-                        else:
-                            try:
-                                import streamlit.components.v1 as components
-                                html = open("components/qz_print.html", "r", encoding="utf-8").read()
-                                payload = {
-                                    "cert": cert,
-                                    "privateKey": private_key,
-                                    "printerName": st.session_state.qz_printer_name,
-                                    "jobs": jobs,
-                                }
-                                components.html(
-                                    f"<script>window.__QZ_PAYLOAD__ = {json.dumps(payload)};</script>\n" + html,
-                                    height=0,
-                                )
-                                st.info("Jika QZ Tray meminta izin, klik Allow.")
-                            except Exception as e:
-                                st.error(f"Gagal memanggil QZ Tray: {e}")
 
         with st.expander("⌨️ Input Manual Barcode + Qty", expanded=False):
             self._init_manual_lines()
