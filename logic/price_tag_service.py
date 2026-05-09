@@ -20,6 +20,13 @@ try:
 except ImportError:
     HAS_ESCPOS = False
 
+# Windows raw print (works with existing drivers)
+try:
+    from .windows_raw_printer import print_escpos_windows
+    HAS_WINDOWS_PRINT = True
+except ImportError:
+    HAS_WINDOWS_PRINT = False
+
 # PDF generation imports
 try:
     from reportlab.lib.pagesizes import A4
@@ -850,3 +857,25 @@ class PriceTagService:
         if not HAS_ESCPOS:
             raise ImportError("escpos_label_printer not available")
         return save_to_file(escpos_data, output_path)
+
+    def print_escpos_windows_driver(
+        self,
+        escpos_data: bytes,
+        printer_name: str = None,
+    ) -> tuple[bool, str]:
+        """Print ESC/POS using Windows printer driver (no driver replacement needed).
+
+        This works WITH your existing Xprinter Windows driver - no Zadig/libusb required.
+
+        Args:
+            escpos_data: ESC/POS command bytes
+            printer_name: Exact Windows printer name (e.g., "Xprinter XP-365B")
+                         If None, auto-detects Xprinter or uses default
+
+        Returns:
+            (success: bool, message: str)
+        """
+        if not HAS_WINDOWS_PRINT:
+            return False, "windows_raw_printer not available. Install: pip install pywin32"
+
+        return print_escpos_windows(escpos_data, printer_name, auto_detect=True)
