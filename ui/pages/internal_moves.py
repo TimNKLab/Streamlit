@@ -20,10 +20,9 @@ from odoo.stock_services import (
     get_candidate_locations_for_products,
     get_location_by_complete_name,
     list_internal_locations,
+    get_products_category_names,
     get_products_uom_ids,
     get_stock_quant_diffs_for_user_at_location,
-    get_employee_partner_id_by_name,
-    get_employee_partner_id,
     get_internal_picking_type_id,
     list_users,
 )
@@ -38,7 +37,7 @@ from odoo.connection import connection_manager
 class InternalMoveContact:
     label: str
     name: str
-    employee_id: int | None = None
+    partner_id: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -76,23 +75,23 @@ def _load_contacts() -> List[InternalMoveContact]:
             continue
         label = item.get("label")
         name = item.get("name")
-        employee_id = item.get("employee_id")
+        partner_id = item.get("partner_id")
 
-        parsed_employee_id: int | None = None
-        if isinstance(employee_id, int):
-            parsed_employee_id = employee_id
-        elif isinstance(employee_id, str) and employee_id.strip().isdigit():
-            parsed_employee_id = int(employee_id.strip())
+        parsed_partner_id: int | None = None
+        if isinstance(partner_id, int):
+            parsed_partner_id = partner_id
+        elif isinstance(partner_id, str) and partner_id.strip().isdigit():
+            parsed_partner_id = int(partner_id.strip())
 
         parsed_name: str = ""
         if isinstance(name, str) and name.strip():
             parsed_name = name.strip()
 
-        if isinstance(label, str) and label.strip() and (parsed_name or parsed_employee_id is not None):
+        if isinstance(label, str) and label.strip() and (parsed_name or parsed_partner_id is not None):
             result.append(InternalMoveContact(
                 label=label.strip(),
                 name=parsed_name,
-                employee_id=parsed_employee_id,
+                partner_id=parsed_partner_id,
             ))
     return result
 
@@ -100,11 +99,6 @@ def _load_contacts() -> List[InternalMoveContact]:
 @st.cache_data(ttl=300)
 def _list_users():
     return list_users()
-
-
-@st.cache_data(ttl=300)
-def _get_partner_id(employee_name: str) -> int | None:
-    return get_employee_partner_id_by_name(employee_name)
 
 
 @st.cache_data(ttl=3600)
@@ -132,6 +126,11 @@ def _get_candidate_locations_batch(
         product_ids=list(product_ids),
         exclude_location_id=exclude_location_id,
     )
+
+
+@st.cache_data(ttl=600)
+def _get_product_category_names(product_ids: Tuple[int, ...]) -> Dict[int, str]:
+    return get_products_category_names(list(product_ids))
 
 
 # ---------------------------------------------------------------------------
@@ -348,14 +347,11 @@ def render_internal_moves_page() -> None:
 
     partner_id: int | None = None
     if contact is not None:
-        if contact.employee_id is not None:
-            partner_id = get_employee_partner_id(contact.employee_id)
-        else:
-            partner_id = _get_partner_id(contact.name)
+        partner_id = contact.partner_id
         if partner_id is None:
             st.error(
-                f"Karyawan '{label}' tidak ditemukan atau tidak memiliki partner. "
-                "Pastikan karyawan memiliki `user_id` atau `address_home_id` di Odoo."
+                f"Kontak '{label}' tidak memiliki partner_id yang valid. "
+                "Pastikan res.partner_id ada di file CSV."
             )
         else:
             st.success(f"Kontak dipilih: {label} (partner_id={partner_id})")
@@ -369,6 +365,15 @@ def render_internal_moves_page() -> None:
         index=None,
     )
     selected_user = next((u for u in users if u.name == selected_user_name), None)
+
+    selected_floor: str | None = None
+    if selected_user is not None and selected_user.name.strip().lower() == "cashier":
+        selected_floor = st.radio(
+            "Kasir lantai",
+            options=["Lantai 1", "Lantai 2", "Lantai 3"],
+            horizontal=True,
+            index=0,
+        )
 
     # --- Lokasi & Load ---
     st.subheader("Muat Selisih Stok")
@@ -394,6 +399,24 @@ def render_internal_moves_page() -> None:
                 user_id=selected_user.id,
                 location_id=display_location.id,
             )
+
+        if selected_floor is not None:
+            active_product_ids = tuple(sorted({d.product_id for d in diffs if d.diff_qty != 0}))
+            category_map = _get_product_category_names(active_product_ids)
+
+            keyword = {
+                "Lantai 1": "groceries",
+                "Lantai 2": "beauty",
+                "Lantai 3": "mom",
+            }.get(selected_floor)
+
+            if keyword:
+                diffs = [
+                    d
+                    for d in diffs
+                    if keyword in str(category_map.get(d.product_id, "")).lower()
+                ]
+
         with st.spinner("Sedang mengkalkulasi rencana internal..."):
             planned_moves, group_counts = _build_planned_moves(diffs, display_location)
 
@@ -408,23 +431,60 @@ def render_internal_moves_page() -> None:
     group_counts = st.session_state.get("internal_moves_group_counts", {})
 
     st.markdown("#### Preview Internal")
-    df_preview = pd.DataFrame(planned_moves)
-    df_display = df_preview[[
-        "barcode", "product_name", "direction", "qty_needed",
-        "qty_to_move", "remainder", "src_location_name", "dest_location_name", "blocked", "block_reason"
-    ]].rename(columns={
-        "barcode": "Barcode",
-        "product_name": "Produk",
-        "direction": "Keterangan",
-        "qty_needed": "Qty Dibutuhkan",
-        "qty_to_move": "Qty Dipindahkan",
-        "remainder": "Sisa",
-        "src_location_name": "Lokasi Asal",
-        "dest_location_name": "Lokasi Tujuan",
-        "blocked": "Diblokir",
-        "block_reason": "Alasan Blokir"
-    })
-    st.dataframe(df_display, use_container_width=True, hide_index=True)
+    selected_by_quant_id: Dict[int, bool] = st.session_state.get("internal_moves_selected", {})
+
+    rows: List[Dict[str, Any]] = []
+    for m in planned_moves:
+        qid = int(m["quant_id"])
+        default_selected = not bool(m.get("blocked"))
+        selected = bool(selected_by_quant_id.get(qid, default_selected))
+        if bool(m.get("blocked")):
+            selected = False
+        rows.append(
+            {
+                "Pilih": selected,
+                "Barcode": m.get("barcode"),
+                "Produk": m.get("product_name"),
+                "Keterangan": m.get("direction"),
+                "Qty Dibutuhkan": m.get("qty_needed"),
+                "Qty Dipindahkan": m.get("qty_to_move"),
+                "Sisa": m.get("remainder"),
+                "Lokasi Asal": m.get("src_location_name"),
+                "Lokasi Tujuan": m.get("dest_location_name"),
+                "Diblokir": m.get("blocked"),
+                "Alasan Blokir": m.get("block_reason"),
+                "__quant_id": qid,
+            }
+        )
+
+    df_display = pd.DataFrame(rows)
+    edited = st.data_editor(
+        df_display.drop(columns=["__quant_id"]),
+        use_container_width=True,
+        hide_index=True,
+        disabled=[
+            "Barcode",
+            "Produk",
+            "Keterangan",
+            "Qty Dibutuhkan",
+            "Qty Dipindahkan",
+            "Sisa",
+            "Lokasi Asal",
+            "Lokasi Tujuan",
+            "Diblokir",
+            "Alasan Blokir",
+        ],
+        column_config={
+            "Pilih": st.column_config.CheckboxColumn(required=True),
+        },
+        key="internal_moves_preview_editor",
+    )
+
+    new_selected: Dict[int, bool] = {}
+    for idx, row in edited.iterrows():
+        qid = int(df_display.iloc[idx]["__quant_id"])
+        new_selected[qid] = bool(row.get("Pilih"))
+    st.session_state.internal_moves_selected = new_selected
 
     st.markdown("#### Preview Pengelompokan")
     grouping_rows = [
@@ -462,7 +522,14 @@ def render_internal_moves_page() -> None:
     if not _validate_create_inputs(partner_id, selected_user):
         return
 
-    groups = _group_clean_moves(planned_moves)
+    selected_by_quant_id = st.session_state.get("internal_moves_selected", {})
+    selected_moves = [
+        m
+        for m in planned_moves
+        if bool(selected_by_quant_id.get(int(m["quant_id"]), not bool(m.get("blocked"))))
+    ]
+
+    groups = _group_clean_moves(selected_moves)
     if not groups:
         st.error("Tidak ada pergerakan bersih untuk dibuat.")
         return

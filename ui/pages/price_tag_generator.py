@@ -4,8 +4,6 @@ import streamlit as st
 import pandas as pd
 import math
 import base64
-import json
-import os
 from datetime import datetime
 from logic.price_tag_service import PriceTagService
 from utils.persistence import save_session, restore_session, clear_session, has_saved_session
@@ -67,10 +65,11 @@ class PriceTagPage:
             st.session_state.thermal_pdf_bytes = None
         if 'thermal_rotate' not in st.session_state:
             st.session_state.thermal_rotate = False
-
-        if 'qz_printer_name' not in st.session_state:
-            st.session_state.qz_printer_name = "XP-DP4601B"
-        
+        if 'thermal_escpos_ready' not in st.session_state:
+            st.session_state.thermal_escpos_ready = False
+        if 'thermal_escpos_bytes' not in st.session_state:
+            st.session_state.thermal_escpos_bytes = None
+ 
         # Try to restore from localStorage on first load
         if not st.session_state.price_tag_restored:
             restored_items = restore_session()
@@ -824,57 +823,6 @@ class PriceTagPage:
         except Exception as e:
             st.error(f"Gagal membuat PDF thermal: {e}")
 
-    def _build_tspl_jobs(self, source_lines: list[dict]) -> list[str]:
-        items = self._build_thermal_items(source_lines)
-        if not items:
-            return []
-
-        def esc(s: str) -> str:
-            return (s or "").replace('"', "'")
-
-        jobs: list[str] = []
-        for item in items:
-            barcode = str(item.get("barcode") or "").strip()
-            name = str(item.get("name") or "").strip()
-            het = item.get("het")
-            if not barcode or not name:
-                continue
-
-            het_text = self.service.format_price(het)
-            if het_text and not het_text.endswith(",-"):
-                het_text = f"{het_text},-"
-
-            tspl = "\n".join(
-                [
-                    "SIZE 28 mm, 18 mm",
-                    "GAP 2 mm, 0 mm",
-                    "DIRECTION 1",
-                    "CLS",
-                    f'TEXT 24,10,"0",0,1,1,"{esc(name)}"',
-                    f'BARCODE 20,40,"128",50,1,0,2,2,"{esc(barcode)}"',
-                    f'TEXT 90,98,"0",0,1,1,"{esc(barcode)}"',
-                    f'TEXT 60,125,"0",0,2,2,"{esc(het_text)}"',
-                    "PRINT 1,1",
-                ]
-            )
-            jobs.append(tspl)
-
-        return jobs
-
-    def _qz_get_secrets(self) -> tuple[str | None, str | None]:
-        cert = None
-        private_key = None
-        try:
-            cert = st.secrets.get("QZ_CERT")
-            private_key = st.secrets.get("QZ_PRIVATE_KEY")
-        except Exception:
-            pass
-        if not cert:
-            cert = os.environ.get("QZ_CERT")
-        if not private_key:
-            private_key = os.environ.get("QZ_PRIVATE_KEY")
-        return cert, private_key
-
     def render_thermal_section(self):
         st.subheader("Thermal Label Generator (18mm x 28mm)")
 
@@ -913,34 +861,6 @@ class PriceTagPage:
                     selected = [r for r in st.session_state.thermal_lines if r.get("Print")]
                     self._generate_thermal_pdf(selected)
 
-                st.text_input("QZ Printer Name", key="qz_printer_name")
-                if st.button("🖨️ Print via QZ Tray (TSPL)", type="secondary"):
-                    selected = [r for r in st.session_state.thermal_lines if r.get("Print")]
-                    jobs = self._build_tspl_jobs(selected)
-                    if not jobs:
-                        st.warning("Tidak ada item untuk dicetak")
-                    else:
-                        cert, private_key = self._qz_get_secrets()
-                        if not cert or not private_key:
-                            st.error("QZ secrets missing. Set QZ_CERT and QZ_PRIVATE_KEY in st.secrets or env.")
-                        else:
-                            try:
-                                import streamlit.components.v1 as components
-                                html = open("components/qz_print.html", "r", encoding="utf-8").read()
-                                payload = {
-                                    "cert": cert,
-                                    "privateKey": private_key,
-                                    "printerName": st.session_state.qz_printer_name,
-                                    "jobs": jobs,
-                                }
-                                components.html(
-                                    f"<script>window.__QZ_PAYLOAD__ = {json.dumps(payload)};</script>\n" + html,
-                                    height=0,
-                                )
-                                st.info("Jika QZ Tray meminta izin, klik Allow.")
-                            except Exception as e:
-                                st.error(f"Gagal memanggil QZ Tray: {e}")
-
         with st.expander("⌨️ Input Manual Barcode + Qty", expanded=False):
             self._init_manual_lines()
             manual_df = pd.DataFrame(st.session_state.thermal_manual_lines)
@@ -977,7 +897,7 @@ class PriceTagPage:
 
         if st.session_state.get("thermal_pdf_ready") and st.session_state.get("thermal_pdf_bytes"):
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            col_print, col_dl = st.columns([1, 1])
+            col_print, col_dl, col_escpos = st.columns([1, 1, 1])
 
             with col_print:
                 if st.button("🖨️ Print Thermal", type="primary", use_container_width=True):
@@ -1031,6 +951,68 @@ class PriceTagPage:
                     type="secondary",
                     use_container_width=True,
                 )
+
+            with col_escpos:
+                # Generate ESC/POS on button click
+                if st.button("🔌 Generate ESC/POS", type="secondary", use_container_width=True):
+                    try:
+                        items = self._build_thermal_items(st.session_state.thermal_lines if st.session_state.get('thermal_lines') else [])
+                        if items:
+                            escpos_bytes = self.service.generate_escpos_labels(
+                                items,
+                                width_mm=18.0 if st.session_state.thermal_rotate else 28.0,
+                                height_mm=28.0 if st.session_state.thermal_rotate else 18.0,
+                            )
+                            st.session_state.thermal_escpos_ready = True
+                            st.session_state.thermal_escpos_bytes = escpos_bytes
+                            st.toast(f"✅ ESC/POS commands generated: {len(escpos_bytes)} bytes", icon="🔌")
+                        else:
+                            st.error("Tidak ada item untuk generate ESC/POS")
+                    except ImportError as e:
+                        st.error(f"Library ESC/POS tidak tersedia: {e}")
+                        st.info("Install: `pip install python-escpos pyusb`")
+                    except Exception as e:
+                        st.error(f"Gagal generate ESC/POS: {e}")
+
+        # ESC/POS Download Section
+        if st.session_state.get("thermal_escpos_ready") and st.session_state.get("thermal_escpos_bytes"):
+            st.divider()
+            st.caption("📟 ESC/POS Direct Printing (bypass PDF rasterization)")
+            
+            escpos_col1, escpos_col2, escpos_col3 = st.columns([1, 1, 1])
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            
+            with escpos_col1:
+                st.download_button(
+                    label="⬇️ Download .bin (raw)",
+                    data=st.session_state.thermal_escpos_bytes,
+                    file_name=f"thermal_labels_{timestamp}.bin",
+                    mime="application/octet-stream",
+                    type="primary",
+                    use_container_width=True,
+                )
+            
+            with escpos_col2:
+                if st.button("💾 Save to session_data/", type="secondary", use_container_width=True):
+                    try:
+                        save_path = f"session_data/thermal_labels_{timestamp}.bin"
+                        self.service.save_escpos_to_file(st.session_state.thermal_escpos_bytes, save_path)
+                        st.success(f"Saved to {save_path}")
+                    except Exception as e:
+                        st.error(f"Gagal save: {e}")
+            
+            with escpos_col3:
+                # USB Direct Print (requires pyusb and proper driver)
+                if st.button("🔌 Print USB Direct", type="secondary", use_container_width=True):
+                    try:
+                        success = self.service.print_escpos_to_usb(st.session_state.thermal_escpos_bytes)
+                        if success:
+                            st.success("✅ Data sent to printer!")
+                        else:
+                            st.error("❌ Failed to send to printer. Check USB connection and drivers.")
+                            st.info("Tip: Install libusbK driver for Xprinter on Windows")
+                    except Exception as e:
+                        st.error(f"USB print error: {e}")
     
     def render_pdf_section(self):
         """Render PDF generation and download section."""

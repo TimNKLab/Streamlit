@@ -13,6 +13,13 @@ import streamlit as st
 # Get project root (works locally and on Streamlit Cloud)
 PROJECT_ROOT = Path(__file__).parent.parent
 
+# ESC/POS imports
+try:
+    from .escpos_label_printer import ESCPOSLabelPrinter, send_to_usb_printer, save_to_file
+    HAS_ESCPOS = True
+except ImportError:
+    HAS_ESCPOS = False
+
 # PDF generation imports
 try:
     from reportlab.lib.pagesizes import A4
@@ -768,3 +775,78 @@ class PriceTagService:
         pdf_bytes = buffer.getvalue()
         buffer.close()
         return pdf_bytes
+
+    # ------------------------------------------------------------------
+    # ESC/POS direct printing (bypasses PDF rasterization)
+    # ------------------------------------------------------------------
+
+    def generate_escpos_labels(
+        self,
+        items: List[Dict[str, Any]],
+        *,
+        width_mm: float = 28.0,
+        height_mm: float = 18.0,
+    ) -> bytes:
+        """Generate ESC/POS commands for direct thermal label printing.
+
+        This bypasses Windows print spooler and PDF rasterization issues
+        by sending raw ESC/POS commands directly to the printer.
+
+        Args:
+            items: List of dicts with 'barcode', 'name', 'het' keys
+            width_mm: Label width in mm (default 28mm)
+            height_mm: Label height in mm (default 18mm)
+
+        Returns:
+            ESC/POS command bytes ready to send to printer
+        """
+        if not HAS_ESCPOS:
+            raise ImportError("escpos_label_printer not available")
+
+        printer = ESCPOSLabelPrinter()
+        # Update dimensions if needed
+        printer.LABEL_WIDTH_DOTS = int(width_mm * 8)  # ~203 DPI approximation
+        printer.LABEL_HEIGHT_DOTS = int(height_mm * 8)
+
+        return printer.generate_labels_batch(
+            items,
+            price_formatter=lambda p: f"Rp {p:,.0f},-".replace(',', '.') if p else "Rp -,-"
+        )
+
+    def print_escpos_to_usb(
+        self,
+        escpos_data: bytes,
+        vendor_id: int = 0x0416,
+        product_id: int = 0x5011,
+    ) -> bool:
+        """Send ESC/POS data to USB thermal printer.
+
+        Args:
+            escpos_data: ESC/POS command bytes
+            vendor_id: USB vendor ID (Xprinter default: 0x0416)
+            product_id: USB product ID (Xprinter default: 0x5011)
+
+        Returns:
+            True if successfully sent to printer
+        """
+        if not HAS_ESCPOS:
+            raise ImportError("escpos_label_printer not available")
+        return send_to_usb_printer(escpos_data, vendor_id, product_id)
+
+    def save_escpos_to_file(
+        self,
+        escpos_data: bytes,
+        output_path: str,
+    ) -> bool:
+        """Save ESC/POS data to file for raw printing or debugging.
+
+        Args:
+            escpos_data: ESC/POS command bytes
+            output_path: File path to save commands
+
+        Returns:
+            True if successfully saved
+        """
+        if not HAS_ESCPOS:
+            raise ImportError("escpos_label_printer not available")
+        return save_to_file(escpos_data, output_path)

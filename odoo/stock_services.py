@@ -95,7 +95,7 @@ def get_location_by_complete_name(complete_name: str) -> Optional[OdooLocation]:
 def list_users(limit: int = 200) -> List[OdooUser]:
     rows = connection_manager.search_read(
         model_name="res.users",
-        domain=[("active", "=", True)],
+        domain=[("active", "=", True), ("share", "=", False)],
         fields=["name"],
         order="name asc",
         limit=limit,
@@ -364,6 +364,34 @@ def get_products_uom_ids(product_ids: Sequence[int]) -> Dict[int, ProductUom]:
         if not isinstance(uom, list) or not uom:
             continue
         result[int(r["id"])] = ProductUom(product_id=int(r["id"]), uom_id=int(uom[0]))
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Product categories
+# ---------------------------------------------------------------------------
+
+def get_products_category_names(product_ids: Sequence[int]) -> Dict[int, str]:
+    if not product_ids:
+        return {}
+
+    rows = connection_manager.search_read(
+        model_name="product.product",
+        domain=[("id", "in", list(set(product_ids)))],
+        fields=["categ_id"],
+        limit=None,
+    )
+
+    result: Dict[int, str] = {}
+    for r in rows:
+        categ = r.get("categ_id")
+        if not isinstance(categ, list) or len(categ) < 2:
+            continue
+        name = str(categ[1] or "").strip()
+        if not name:
+            continue
+        result[int(r["id"])] = name
 
     return result
 
