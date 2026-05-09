@@ -369,6 +369,34 @@ def get_products_uom_ids(product_ids: Sequence[int]) -> Dict[int, ProductUom]:
 
 
 # ---------------------------------------------------------------------------
+# Product categories
+# ---------------------------------------------------------------------------
+
+def get_products_category_names(product_ids: Sequence[int]) -> Dict[int, str]:
+    if not product_ids:
+        return {}
+
+    rows = connection_manager.search_read(
+        model_name="product.product",
+        domain=[("id", "in", list(set(product_ids)))],
+        fields=["categ_id"],
+        limit=None,
+    )
+
+    result: Dict[int, str] = {}
+    for r in rows:
+        categ = r.get("categ_id")
+        if not isinstance(categ, list) or len(categ) < 2:
+            continue
+        name = str(categ[1] or "").strip()
+        if not name:
+            continue
+        result[int(r["id"])] = name
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Picking type
 # ---------------------------------------------------------------------------
 
