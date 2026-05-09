@@ -979,7 +979,7 @@ class PriceTagPage:
             st.divider()
             st.caption("📟 ESC/POS Direct Printing (bypass PDF rasterization)")
             
-            escpos_col1, escpos_col2, escpos_col3 = st.columns([1, 1, 1])
+            escpos_col1, escpos_col2, escpos_col3, escpos_col4 = st.columns([1, 1, 1, 1])
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             
             with escpos_col1:
@@ -1002,7 +1002,7 @@ class PriceTagPage:
                         st.error(f"Gagal save: {e}")
             
             with escpos_col3:
-                # USB Direct Print (requires pyusb and proper driver)
+                # USB Direct Print (requires pyusb and libusbK driver via Zadig)
                 if st.button("🔌 Print USB Direct", type="secondary", use_container_width=True):
                     try:
                         success = self.service.print_escpos_to_usb(st.session_state.thermal_escpos_bytes)
@@ -1010,9 +1010,23 @@ class PriceTagPage:
                             st.success("✅ Data sent to printer!")
                         else:
                             st.error("❌ Failed to send to printer. Check USB connection and drivers.")
-                            st.info("Tip: Install libusbK driver for Xprinter on Windows")
+                            st.info("Tip: Install libusbK driver for Xprinter on Windows (requires driver replacement)")
                     except Exception as e:
                         st.error(f"USB print error: {e}")
+            
+            with escpos_col4:
+                # Windows Driver Print (works with existing driver - no Zadig needed)
+                if st.button("🖨️ Print Windows Driver", type="secondary", use_container_width=True):
+                    try:
+                        success, message = self.service.print_escpos_windows_driver(st.session_state.thermal_escpos_bytes)
+                        if success:
+                            st.success(f"✅ {message}")
+                        else:
+                            st.error(f"❌ {message}")
+                            st.info("Tip: Make sure Xprinter is installed in Windows Printers")
+                    except Exception as e:
+                        st.error(f"Windows print error: {e}")
+                        st.info("Install required: pip install pywin32")
     
     def render_pdf_section(self):
         """Render PDF generation and download section."""
