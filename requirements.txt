@@ -10,3 +10,8 @@ streamlit-aggrid
 reportlab>=3.6.0
 duckdb>=0.9.0
 pyarrow>=14.0.0
+<<<<<<< HEAD
+=======
+python-escpos>=3.0.0
+pyusb>=1.2.1
+>>>>>>> 0c6e43234b30fb883d87b5d28c76d71a5ebf3f35
