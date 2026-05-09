@@ -745,43 +745,94 @@ class PriceTagPage:
                 if st.button("Fetch Vendor Bill", type="primary", use_container_width=True):
                     self._fetch_vendor_bill()
             with col2:
-                if st.button("Clear Vendor Bill", type="secondary", use_container_width=True):
-                    st.session_state.thermal_lines = []
-                    st.session_state.thermal_pdf_ready = False
-                    st.session_state.thermal_pdf_bytes = None
+                pass  # Empty column for layout balance
 
-            if st.session_state.thermal_lines:
-                edited = st.data_editor(
-                    pd.DataFrame(st.session_state.thermal_lines),
-                    hide_index=True,
-                    use_container_width=True,
-                    column_config={
-                        "Print": st.column_config.CheckboxColumn("Print", default=True),
-                        "barcode": st.column_config.TextColumn("Barcode"),
-                        "name": st.column_config.TextColumn("Name", width="large"),
-                        "qty": st.column_config.NumberColumn("Qty", min_value=0, step=1),
-                        "het": st.column_config.NumberColumn("HET"),
-                    },
-                    key="thermal_vendor_bill_editor",
-                )
-                st.session_state.thermal_lines = edited.to_dict("records")
-                if st.button("Generate Thermal PDF (Vendor Bill)", type="primary"):
-                    selected = [r for r in st.session_state.thermal_lines if r.get("Print")]
-                    self._generate_thermal_pdf(selected)
+            remove_idx = None
+            for idx, row in enumerate(st.session_state.thermal_lines):
+                cols = st.columns([0.8, 2, 4, 1, 1.5, 0.8])
+                key_base = f"vb_{idx}_{row.get('barcode', '')[:6]}"
+
+                with cols[0]:
+                    print_val = st.checkbox("", value=row.get("Print", True), key=f"{key_base}_print", label_visibility="collapsed")
+                    row["Print"] = print_val
+
+                with cols[1]:
+                    st.caption(row.get("barcode", ""))
+
+                with cols[2]:
+                    st.caption(row.get("name", "")[:40])
+
+                with cols[3]:
+                    st.caption(str(row.get("qty", 0)))
+
+                with cols[4]:
+                    het = row.get("het")
+                    st.caption(f"Rp {int(het):,}" if het else "-")
+
+                with cols[5]:
+                    if st.button("✕", key=f"{key_base}_del", help="Remove"):
+                        remove_idx = idx
+
+            if remove_idx is not None:
+                st.session_state.thermal_lines.pop(remove_idx)
+                st.rerun()
+
+            selected = [r for r in st.session_state.thermal_lines if r.get("Print")]
+            st.caption(f"Selected: {len(selected)} / {len(st.session_state.thermal_lines)} items")
+
+            if st.button("Generate Thermal PDF (Vendor Bill)", type="primary"):
+                self._generate_thermal_pdf(selected)
 
         with st.expander("⌨️ Input Manual Barcode + Qty", expanded=False):
             self._init_manual_lines()
-            edited = st.data_editor(
-                pd.DataFrame(st.session_state.thermal_manual_lines),
-                hide_index=True,
-                use_container_width=True,
-                column_config={
-                    "barcode": st.column_config.TextColumn("Barcode"),
-                    "qty": st.column_config.NumberColumn("Qty", min_value=0, step=1),
-                },
-                key="thermal_manual_editor",
-            )
-            st.session_state.thermal_manual_lines = edited.to_dict("records")
+
+            # Header
+            hdr = st.columns([0.5, 3, 1.5, 0.8])
+            hdr[0].markdown("**#**")
+            hdr[1].markdown("**Barcode**")
+            hdr[2].markdown("**Qty**")
+            hdr[3].markdown("**Del**")
+
+            remove_idx = None
+            for idx, row in enumerate(st.session_state.thermal_manual_lines):
+                cols = st.columns([0.5, 3, 1.5, 0.8])
+                key_base = f"tm_{idx}"
+
+                with cols[0]:
+                    st.caption(f"{idx+1}")
+
+                with cols[1]:
+                    barcode = st.text_input("", value=row.get("barcode", ""), key=f"{key_base}_bc", label_visibility="collapsed")
+                    if barcode != row.get("barcode", ""):
+                        row["barcode"] = barcode
+                        # Auto-lookup on valid length
+                        if len(barcode.strip()) >= 6:
+                            product = self.service.lookup_product(barcode.strip())
+                            if product:
+                                row["_name"] = product.get("name", "")
+                                row["_het"] = product.get("het")
+
+                with cols[2]:
+                    qty = st.number_input("", value=int(row.get("qty", 1)), min_value=0, step=1, key=f"{key_base}_qty", label_visibility="collapsed")
+                    if qty != row.get("qty", 1):
+                        row["qty"] = qty
+
+                with cols[3]:
+                    if st.button("✕", key=f"{key_base}_del", help="Remove"):
+                        remove_idx = idx
+
+                # Show lookup result inline
+                if row.get("_name"):
+                    st.caption(f"✓ {row['_name'][:30]}")
+
+            if remove_idx is not None:
+                st.session_state.thermal_manual_lines.pop(remove_idx)
+                st.rerun()
+
+            # Add row button
+            if st.button("➕ Add Row", use_container_width=True):
+                st.session_state.thermal_manual_lines.append({"barcode": "", "qty": 1})
+                st.rerun()
 
             if st.button("Generate Thermal PDF (Manual)", type="primary"):
                 manual_lines = []
@@ -789,15 +840,21 @@ class PriceTagPage:
                     barcode = str(row.get("barcode") or "").strip()
                     if not barcode:
                         continue
-                    product = self.service.lookup_product(barcode)
-                    if not product:
-                        continue
-                    manual_lines.append({
-                        "barcode": barcode,
-                        "name": product.get("name", ""),
-                        "qty": row.get("qty", 0),
-                        "het": product.get("het"),
-                    })
+                    # Use cached lookup or fetch
+                    name = row.get("_name")
+                    het = row.get("_het")
+                    if not name:
+                        product = self.service.lookup_product(barcode)
+                        if product:
+                            name = product.get("name", "")
+                            het = product.get("het")
+                    if name:
+                        manual_lines.append({
+                            "barcode": barcode,
+                            "name": name,
+                            "qty": row.get("qty", 1),
+                            "het": het,
+                        })
                 self._generate_thermal_pdf(manual_lines)
 
         ss = st.session_state
@@ -813,41 +870,41 @@ Saat dialog print Edge terbuka, atur:
 4. **Options** → **Auto-rotate pages** → **OFF**
                 """)
 
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            col_print, col_dl = st.columns(2)
-            with col_print:
-                if st.button("🖨️ Print Thermal", type="primary", use_container_width=True):
-                    try:
-                        pdf_b64 = base64.b64encode(ss.thermal_pdf_bytes).decode("ascii")
-                        components.html(
-                            f"""<script>
-                              (function(){{
-                                try {{
-                                  const bytes = Uint8Array.from(atob("{pdf_b64}"), c=>c.charCodeAt(0));
-                                  const url = URL.createObjectURL(new Blob([bytes],{{type:'application/pdf'}}));
-                                  const w = window.open(url,'_blank');
-                                  if(!w){{ alert('Popup blocked.'); return; }}
-                                  const t = setInterval(()=>{{
-                                    try{{ if(w.document.readyState==='complete'){{ clearInterval(t); w.focus(); w.print(); }} }}
-                                    catch(e){{}}
-                                  }},250);
-                                }}catch(e){{ alert('Failed: '+(e.message||e)); }}
-                              }})();
-                            </script>""",
-                            height=0,
-                        )
-                    except Exception as e:
-                        st.error(f"Gagal membuka print dialog: {e}")
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                col_print, col_dl = st.columns(2)
+                with col_print:
+                    if st.button("🖨️ Print Thermal", type="primary", use_container_width=True):
+                        try:
+                            pdf_b64 = base64.b64encode(ss.thermal_pdf_bytes).decode("ascii")
+                            components.html(
+                                f"""<script>
+                                  (function(){{
+                                    try {{
+                                      const bytes = Uint8Array.from(atob("{pdf_b64}"), c=>c.charCodeAt(0));
+                                      const url = URL.createObjectURL(new Blob([bytes],{{type:'application/pdf'}}));
+                                      const w = window.open(url,'_blank');
+                                      if(!w){{ alert('Popup blocked.'); return; }}
+                                      const t = setInterval(()=>{{
+                                        try{{ if(w.document.readyState==='complete'){{ clearInterval(t); w.focus(); w.print(); }} }}
+                                        catch(e){{}}
+                                      }},250);
+                                    }}catch(e){{ alert('Failed: '+(e.message||e)); }}
+                                  }})();
+                                </script>""",
+                                height=0,
+                            )
+                        except Exception as e:
+                            st.error(f"Gagal membuka print dialog: {e}")
 
-            with col_dl:
-                st.download_button(
-                    label="⬇️ Download Thermal PDF",
-                    data=ss.thermal_pdf_bytes,
-                    file_name=f"thermal_labels_{timestamp}.pdf",
-                    mime="application/pdf",
-                    type="secondary",
-                    use_container_width=True,
-                )
+                with col_dl:
+                    st.download_button(
+                        label="⬇️ Download Thermal PDF",
+                        data=ss.thermal_pdf_bytes,
+                        file_name=f"thermal_labels_{timestamp}.pdf",
+                        mime="application/pdf",
+                        type="secondary",
+                        use_container_width=True,
+                    )
 
     # ------------------------------------------------------------------
     # Auto-focus
