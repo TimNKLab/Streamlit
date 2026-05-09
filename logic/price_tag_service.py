@@ -679,23 +679,27 @@ class PriceTagService:
         buffer = io.BytesIO()
         c = pdfcanvas.Canvas(buffer, pagesize=(page_w, page_h))
 
-        pad_x = 0.8 * mm
-        pad_y = 0.8 * mm
+        # Tighter padding for small 18x28mm labels
+        pad_x = 0.3 * mm
+        pad_y = 0.3 * mm
         max_w = page_w - 2 * pad_x
 
-        name_fs = 5
-        barcode_text_fs = 5
+        # Smaller fonts for tiny labels
+        name_fs = 4
+        barcode_text_fs = 4
         price_fs = 5
 
-        # Pre-compute layout constants (same for every label)
-        name_zone_h = 4.5 * mm
+        # Pre-compute layout constants for 18x28mm label
+        name_zone_h = 4.0 * mm
         price_zone_h = 4.5 * mm
-        barcode_text_zone_h = 3.0 * mm
-        barcode_zone_h = max(1.0 * mm, page_h - (pad_y * 2) - name_zone_h - barcode_text_zone_h - price_zone_h)
-        name_y = page_h - pad_y - name_zone_h
-        barcode_y = pad_y + price_zone_h + barcode_text_zone_h
-        barcode_text_y = pad_y + price_zone_h
+        barcode_text_zone_h = 2.5 * mm
+        barcode_zone_h = page_h - (pad_y * 2) - name_zone_h - barcode_text_zone_h - price_zone_h
+
+        # Vertical positions (from bottom up)
         price_y = pad_y
+        barcode_text_y = price_y + price_zone_h
+        barcode_y = barcode_text_y + barcode_text_zone_h
+        name_y = page_h - pad_y - name_zone_h
 
         def _truncate(text: str, font: str, fs: int) -> str:
             """Truncate text to fit max_w, appending ellipsis if needed."""
@@ -739,7 +743,7 @@ class PriceTagService:
             # Barcode graphic
             try:
                 bar_h = max(3.5 * mm, barcode_zone_h - 0.4 * mm)
-                bc = code128.Code128(barcode, barWidth=0.25 * mm, barHeight=bar_h, humanReadable=False)
+                bc = code128.Code128(barcode, barWidth=0.15 * mm, barHeight=bar_h, humanReadable=False)
                 bx = pad_x + (max_w - bc.width) / 2
                 by = barcode_y + (barcode_zone_h - bc.height) / 2
                 bc.drawOn(c, bx, by)
