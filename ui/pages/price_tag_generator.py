@@ -979,7 +979,7 @@ class PriceTagPage:
             st.divider()
             st.caption("📟 ESC/POS Direct Printing (bypass PDF rasterization)")
             
-            escpos_col1, escpos_col2, escpos_col3, escpos_col4 = st.columns([1, 1, 1, 1])
+            escpos_col1, escpos_col2, escpos_col3 = st.columns([1, 1, 1])
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             
             with escpos_col1:
@@ -1002,7 +1002,7 @@ class PriceTagPage:
                         st.error(f"Gagal save: {e}")
             
             with escpos_col3:
-                # USB Direct Print (requires pyusb and libusbK driver via Zadig)
+                # USB Direct Print (requires pyusb and proper driver - LOCAL ONLY)
                 if st.button("🔌 Print USB Direct", type="secondary", use_container_width=True):
                     try:
                         success = self.service.print_escpos_to_usb(st.session_state.thermal_escpos_bytes)
@@ -1010,23 +1010,44 @@ class PriceTagPage:
                             st.success("✅ Data sent to printer!")
                         else:
                             st.error("❌ Failed to send to printer. Check USB connection and drivers.")
-                            st.info("Tip: Install libusbK driver for Xprinter on Windows (requires driver replacement)")
+                            st.info("Tip: Install libusbK driver for Xprinter on Windows")
                     except Exception as e:
                         st.error(f"USB print error: {e}")
             
-            with escpos_col4:
-                # Windows Driver Print (works with existing driver - no Zadig needed)
-                if st.button("🖨️ Print Windows Driver", type="secondary", use_container_width=True):
+            # Cloud Print via Web Serial API (works from anywhere)
+            st.divider()
+            escpos_cloud_col1, escpos_cloud_col2 = st.columns([1, 1])
+            with escpos_cloud_col1:
+                if st.button("☁️ Print via Browser (Cloud)", type="primary", use_container_width=True):
                     try:
-                        success, message = self.service.print_escpos_windows_driver(st.session_state.thermal_escpos_bytes)
-                        if success:
-                            st.success(f"✅ {message}")
+                        from utils.escpos_cloud_bridge import ESCPOSCloudBridge
+                        bridge = ESCPOSCloudBridge()
+                        result = bridge.print_direct(st.session_state.thermal_escpos_bytes)
+                        if result.get('success'):
+                            st.success("🖨️ Check your browser for USB printer selection!")
+                            st.info("Your browser will send ESC/POS commands directly to the printer.")
                         else:
-                            st.error(f"❌ {message}")
-                            st.info("Tip: Make sure Xprinter is installed in Windows Printers")
+                            st.error(f"❌ {result.get('error', 'Failed to open print dialog')}")
                     except Exception as e:
-                        st.error(f"Windows print error: {e}")
-                        st.info("Install required: pip install pywin32")
+                        st.error(f"Cloud print error: {e}")
+            
+            with escpos_cloud_col2:
+                with st.expander("ℹ️ About Cloud Printing"):
+                    st.markdown("""
+                    **Browser Direct Printing**
+                    
+                    This uses the **Web Serial API** to send ESC/POS commands directly from your browser to the USB printer.
+                    
+                    **Benefits:**
+                    - ✅ Works from Streamlit Cloud (no local Python needed)
+                    - ✅ No driver changes required
+                    - ✅ Chrome/Edge native support
+                    
+                    **Requirements:**
+                    - Chrome or Edge browser (v89+)
+                    - HTTPS or localhost connection
+                    - Grant USB permission when prompted
+                    """)
     
     def render_pdf_section(self):
         """Render PDF generation and download section."""
