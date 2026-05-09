@@ -893,6 +893,20 @@ class PriceTagPage:
                 self._generate_thermal_pdf(manual_lines)
 
         if st.session_state.get("thermal_pdf_ready") and st.session_state.get("thermal_pdf_bytes"):
+            # Print settings guide
+            with st.expander("⚠️ Pengaturan Print (WAJIB di Edge/Windows)", expanded=True):
+                st.markdown("""
+                **Label: 18mm × 28mm (Portrait)**
+
+                Saat dialog print Edge terbuka, atur:
+                1. **More settings** → **Paper Size** → Pilih/buat **"18×28mm"** atau **"User Defined"**
+                2. **Scale** → Pilih **"Actual size"** atau **"100%"** (bukan "Fit to page")
+                3. **Margins** → Pilih **"None"** atau minimum
+                4. **Options** → **Auto-rotate pages** → **OFF**
+
+                Jika tidak diatur, printer akan scale ke ukuran A4/half A4 dan label jadi terlalu besar.
+                """)
+
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             col_print, col_dl = st.columns([1, 1])
 
