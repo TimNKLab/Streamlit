@@ -237,8 +237,7 @@ class ESCPOSCloudBridge:
                         success ? 'success' : 'error';
                 }}
                 
-                // Auto-start on load
-                window.addEventListener('load', quickPrint);
+                // Do NOT auto-start on load; must be triggered by user gesture.
             </script>
             <style>
                 body {{ font-family: sans-serif; padding: 20px; text-align: center; }}
@@ -249,12 +248,12 @@ class ESCPOSCloudBridge:
             </style>
         </head>
         <body>
-            <div id="result">⏳ Waiting for printer selection...</div>
+            <div id="result">Click the button to select printer and print.</div>
             <button onclick="quickPrint()" style="padding: 10px 20px; cursor: pointer;">
                 🔌 Select Printer & Print
             </button>
             <div class="info">
-                <p>Click the button above to select your Xprinter USB device.</p>
+                <p>Click the button above to select your USB printer device.</p>
                 <p>Requires Chrome/Edge with HTTPS or localhost.</p>
             </div>
         </body>
@@ -265,7 +264,10 @@ class ESCPOSCloudBridge:
         # See note in embed(): avoid passing unsupported `key`.
         components.html(auto_print_html, height=180)
         
-        return {'success': True, 'message': 'Print dialog opened - check browser for USB permission prompt'}
+        return {
+            'success': True,
+            'message': 'Component shown. Click "Select Printer & Print" inside it to open the USB permission prompt.'
+        }
     
     def render_controls(self) -> None:
         """Render full bridge controls with status display."""
