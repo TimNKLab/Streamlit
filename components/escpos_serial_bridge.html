@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>ESC/POS Serial Bridge</title>
+    <script>
+        // ESC/POS Serial Bridge for Cloud Printing
+        // Uses Web Serial API to send ESC/POS commands directly to USB thermal printer
+        // Compatible with Chrome/Edge 89+ (requires secure context: HTTPS or localhost)
+        
+        let port = null;
+        let writer = null;
+        
+        // ESC/POS constants
+        const ESC = 0x1B;
+        const GS = 0x1D;
+        const FS = 0x1C;
+        
+        // Check if Web Serial is supported
+        function isWebSerialSupported() {
+            return 'serial' in navigator;
+        }
+        
+        // Get status for parent
+        function updateStatus(status, details = '') {
+            const data = {
+                type: 'status',
+                supported: isWebSerialSupported(),
+                connected: port !== null,
+                status: status,
+                details: details,
+                timestamp: new Date().toISOString()
+            };
+            
+            if (window.parent !== window) {
+                window.parent.postMessage(data, '*');
+            }
+            
+            // Also update UI
+            document.getElementById('status').textContent = status;
+            document.getElementById('details').textContent = details;
+            console.log('[ESC/POS Bridge]', status, details);
+        }
+        
+        // List available serial ports
+        async function listPorts() {
+            if (!isWebSerialSupported()) {
+                updateStatus('ERROR', 'Web Serial API not supported. Use Chrome/Edge 89+ with HTTPS or localhost');
+                return [];
+            }
+            
+            try {
+                // Get ports that were previously granted permission
+                const ports = await navigator.serial.getPorts();
+                updateStatus('PORTS_LISTED', `Found ${ports.length} previously authorized port(s)`);
+                return ports.map((p, i) => ({
+                    index: i,
+                    usbVendorId: p.getInfo().usbVendorId?.toString(16),
+                    usbProductId: p.getInfo().usbProductId?.toString(16)
+                }));
+            } catch (error) {
+                updateStatus('ERROR', `Failed to list ports: ${error.message}`);
+                return [];
+            }
+        }
+        
+        // Request new port (user selects via browser picker)
+        async function requestPort() {
+            if (!isWebSerialSupported()) {
+                updateStatus('ERROR', 'Web Serial API not supported');
+                return null;
+            }
+            
+            try {
+                // Filter for common thermal printer VID/PIDs
+                const filters = [
+                    // Xprinter
+                    { usbVendorId: 0x0416, usbProductId: 0x5011 },
+                    { usbVendorId: 0x0416 },
+                    // Epson
+                    { usbVendorId: 0x04b8 },
+                    // Bixolon
+                    { usbVendorId: 0x1504 },
+                    // Star
+                    { usbVendorId: 0x0519 },
+                    // Generic (no filter - will show all serial devices)
+                ];
+                
+                port = await navigator.serial.requestPort({ filters });
+                const info = port.getInfo();
+                updateStatus('PORT_SELECTED', `VID: ${info.usbVendorId?.toString(16)}, PID: ${info.usbProductId?.toString(16)}`);
+                
+                return {
+                    usbVendorId: info.usbVendorId,
+                    usbProductId: info.usbProductId,
+                    success: true
+                };
+            } catch (error) {
+                if (error.name === 'NotFoundError') {
+                    updateStatus('CANCELLED', 'No port selected by user');
+                } else {
+                    updateStatus('ERROR', `Port selection failed: ${error.message}`);
+                }
+                return null;
+            }
+        }
+        
+        // Open connection to printer
+        async function openPort(baudRate = 9600) {
+            if (!port) {
+                updateStatus('ERROR', 'No port selected. Call requestPort() first');
+                return false;
+            }
+            
+            try {
+                await port.open({ baudRate: baudRate });
+                writer = port.writable.getWriter();
+                updateStatus('CONNECTED', `Port opened at ${baudRate} baud`);
+                return true;
+            } catch (error) {
+                updateStatus('ERROR', `Failed to open port: ${error.message}`);
+                return false;
+            }
+        }
+        
+        // Close connection
+        async function closePort() {
+            try {
+                if (writer) {
+                    await writer.close();
+                    writer = null;
+                }
+                if (port) {
+                    await port.close();
+                    port = null;
+                }
+                updateStatus('DISCONNECTED', 'Port closed');
+                return true;
+            } catch (error) {
+                updateStatus('ERROR', `Close failed: ${error.message}`);
+                return false;
+            }
+        }
+        
+        // Send raw ESC/POS data (base64 encoded from Python)
+        async function sendData(base64Data) {
+            if (!writer) {
+                updateStatus('ERROR', 'Port not open. Call openPort() first');
+                return { success: false, error: 'Port not open' };
+            }
+            
+            try {
+                // Decode base64 to Uint8Array
+                const binaryString = atob(base64Data);
+                const data = new Uint8Array(binaryString.length);
+                for (let i = 0; i < binaryString.length; i++) {
+                    data[i] = binaryString.charCodeAt(i);
+                }
+                
+                // Send in chunks
+                const CHUNK_SIZE = 64;
+                let sent = 0;
+                while (sent < data.length) {
+                    const chunk = data.slice(sent, sent + CHUNK_SIZE);
+                    await writer.write(chunk);
+                    sent += chunk.length;
+                }
+                
+                updateStatus('DATA_SENT', `Sent ${data.length} bytes`);
+                return { success: true, bytesSent: data.length };
+            } catch (error) {
+                updateStatus('ERROR', `Send failed: ${error.message}`);
+                return { success: false, error: error.message };
+            }
+        }
+        
+        // Quick print function: select, open, send, close
+        async function quickPrint(base64Data, baudRate = 9600) {
+            // If no port, request one
+            if (!port) {
+                const selected = await requestPort();
+                if (!selected) return { success: false, error: 'No port selected' };
+            }
+            
+            // If port not open, open it
+            if (!writer) {
+                const opened = await openPort(baudRate);
+                if (!opened) return { success: false, error: 'Failed to open port' };
+            }
+            
+            // Send data
+            const result = await sendData(base64Data);
+            
+            // Optional: auto-close after print
+            // await closePort();
+            
+            return result;
+        }
+        
+        // Auto-initialize on load
+        window.addEventListener('load', () => {
+            if (isWebSerialSupported()) {
+                updateStatus('READY', 'Web Serial API available. Select printer to connect.');
+            } else {
+                updateStatus('UNSUPPORTED', 'Web Serial API not available. Use Chrome/Edge with HTTPS.');
+            }
+        });
+        
+        // Listen for messages from parent (Streamlit)
+        window.addEventListener('message', async (event) => {
+            const data = event.data;
+            if (!data || !data.type) return;
+            
+            console.log('[ESC/POS Bridge] Received message:', data.type);
+            
+            switch (data.type) {
+                case 'LIST_PORTS':
+                    const ports = await listPorts();
+                    event.source.postMessage({ type: 'PORTS_RESULT', ports }, event.origin);
+                    break;
+                    
+                case 'REQUEST_PORT':
+                    const portInfo = await requestPort();
+                    event.source.postMessage({ type: 'PORT_RESULT', port: portInfo }, event.origin);
+                    break;
+                    
+                case 'OPEN_PORT':
+                    const opened = await openPort(data.baudRate || 9600);
+                    event.source.postMessage({ type: 'OPEN_RESULT', success: opened }, event.origin);
+                    break;
+                    
+                case 'CLOSE_PORT':
+                    const closed = await closePort();
+                    event.source.postMessage({ type: 'CLOSE_RESULT', success: closed }, event.origin);
+                    break;
+                    
+                case 'SEND_DATA':
+                    const result = await sendData(data.base64Data);
+                    event.source.postMessage({ type: 'SEND_RESULT', ...result }, event.origin);
+                    break;
+                    
+                case 'QUICK_PRINT':
+                    const quickResult = await quickPrint(data.base64Data, data.baudRate || 9600);
+                    event.source.postMessage({ type: 'QUICK_PRINT_RESULT', ...quickResult }, event.origin);
+                    break;
+                    
+                case 'GET_STATUS':
+                    updateStatus(port ? 'CONNECTED' : 'READY', 'Status check');
+                    break;
+            }
+        });
+    </script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            padding: 20px;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        .status-box {
+            padding: 10px 15px;
+            border-radius: 8px;
+            margin: 10px 0;
+            font-family: monospace;
+            font-size: 14px;
+        }
+        .status-ready { background: #d4edda; color: #155724; }
+        .status-connected { background: #cce5ff; color: #004085; }
+        .status-error { background: #f8d7da; color: #721c24; }
+        .status-unsupported { background: #fff3cd; color: #856404; }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .btn-primary { background: #007bff; color: white; }
+        .btn-secondary { background: #6c757d; color: white; }
+        .info { color: #666; font-size: 12px; margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <h2>ESC/POS Serial Bridge</h2>
+    
+    <div id="statusBox" class="status-box">
+        <div>Status: <span id="status">Initializing...</span></div>
+        <div id="details" style="font-size: 12px; margin-top: 5px;"></div>
+    </div>
+    
+    <div style="margin: 20px 0;">
+        <button class="btn-primary" onclick="requestPort()">🔌 Select Printer</button>
+        <button class="btn-secondary" onclick="openPort()">▶️ Open</button>
+        <button class="btn-secondary" onclick="closePort()">⏹️ Close</button>
+    </div>
+    
+    <div class="info">
+        <p><strong>Cloud Printing Mode</strong></p>
+        <p>This bridge uses Web Serial API to send ESC/POS commands directly from your browser to the USB printer.</p>
+        <p>Requirements:</p>
+        <ul>
+            <li>Chrome or Edge browser (version 89+)</li>
+            <li>HTTPS or localhost connection</li>
+            <li>User permission to access USB device</li>
+        </ul>
+        <p>Your printer will appear as a USB Serial device. Select it above when prompted.</p>
+    </div>
+    
+    <script>
+        // Update status box styling based on state
+        const statusBox = document.getElementById('statusBox');
+        const statusEl = document.getElementById('status');
+        
+        const observer = new MutationObserver(() => {
+            const status = statusEl.textContent;
+            statusBox.className = 'status-box';
+            if (status === 'READY') statusBox.classList.add('status-ready');
+            else if (status === 'CONNECTED' || status === 'DATA_SENT') statusBox.classList.add('status-connected');
+            else if (status === 'UNSUPPORTED') statusBox.classList.add('status-unsupported');
+            else if (status === 'ERROR') statusBox.classList.add('status-error');
+        });
+        
+        observer.observe(statusEl, { childList: true });
+    </script>
+</body>
+</html>

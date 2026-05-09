@@ -1002,7 +1002,7 @@ class PriceTagPage:
                         st.error(f"Gagal save: {e}")
             
             with escpos_col3:
-                # USB Direct Print (requires pyusb and proper driver)
+                # USB Direct Print (requires pyusb and proper driver - LOCAL ONLY)
                 if st.button("🔌 Print USB Direct", type="secondary", use_container_width=True):
                     try:
                         success = self.service.print_escpos_to_usb(st.session_state.thermal_escpos_bytes)
@@ -1013,6 +1013,40 @@ class PriceTagPage:
                             st.info("Tip: Install libusbK driver for Xprinter on Windows")
                     except Exception as e:
                         st.error(f"USB print error: {e}")
+            
+            # Cloud Print via Web Serial API (works from anywhere)
+            escpos_cloud_col1, escpos_cloud_col2 = st.columns([1, 1])
+            with escpos_cloud_col1:
+                if st.button("☁️ Print via Browser (Cloud)", type="primary", use_container_width=True):
+                    try:
+                        from utils.escpos_cloud_bridge import ESCPOSCloudBridge
+                        bridge = ESCPOSCloudBridge()
+                        result = bridge.print_direct(st.session_state.thermal_escpos_bytes)
+                        if result.get('success'):
+                            st.success("🖨️ Check your browser for USB printer selection!")
+                            st.info("Your browser will send ESC/POS commands directly to the printer.")
+                        else:
+                            st.error(f"❌ {result.get('error', 'Failed to open print dialog')}")
+                    except Exception as e:
+                        st.error(f"Cloud print error: {e}")
+            
+            with escpos_cloud_col2:
+                with st.expander("ℹ️ About Cloud Printing"):
+                    st.markdown("""
+                    **Browser Direct Printing**
+                    
+                    This uses the **Web Serial API** to send ESC/POS commands directly from your browser to the USB printer.
+                    
+                    **Benefits:**
+                    - ✅ Works from Streamlit Cloud (no local Python needed)
+                    - ✅ No driver changes required
+                    - ✅ Chrome/Edge native support
+                    
+                    **Requirements:**
+                    - Chrome or Edge browser (v89+)
+                    - HTTPS or localhost connection
+                    - Grant USB permission when prompted
+                    """)
     
     def render_pdf_section(self):
         """Render PDF generation and download section."""
