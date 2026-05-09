@@ -64,7 +64,7 @@ class PriceTagPage:
         if 'thermal_pdf_bytes' not in st.session_state:
             st.session_state.thermal_pdf_bytes = None
         if 'thermal_rotate' not in st.session_state:
-            st.session_state.thermal_rotate = False
+            st.session_state.thermal_rotate = True  # Default: landscape (28×18) - works for this printer
         # Try to restore from localStorage on first load
         if not st.session_state.price_tag_restored:
             restored_items = restore_session()
@@ -896,10 +896,10 @@ class PriceTagPage:
             # Print settings guide
             with st.expander("⚠️ Pengaturan Print (WAJIB di Edge/Windows)", expanded=True):
                 st.markdown("""
-                **Label: 18mm × 28mm (Portrait)**
+                **Label: 28mm × 18mm (Landscape)** ← Default (check "Rotate" untuk 18×28)
 
                 Saat dialog print Edge terbuka, atur:
-                1. **More settings** → **Paper Size** → Pilih/buat **"18×28mm"** atau **"User Defined"**
+                1. **More settings** → **Paper Size** → Pilih/buat **"28×18mm"** atau **"User Defined"**
                 2. **Scale** → Pilih **"Actual size"** atau **"100%"** (bukan "Fit to page")
                 3. **Margins** → Pilih **"None"** atau minimum
                 4. **Options** → **Auto-rotate pages** → **OFF**
