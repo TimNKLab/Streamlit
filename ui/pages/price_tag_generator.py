@@ -65,11 +65,6 @@ class PriceTagPage:
             st.session_state.thermal_pdf_bytes = None
         if 'thermal_rotate' not in st.session_state:
             st.session_state.thermal_rotate = False
-        if 'thermal_escpos_ready' not in st.session_state:
-            st.session_state.thermal_escpos_ready = False
-        if 'thermal_escpos_bytes' not in st.session_state:
-            st.session_state.thermal_escpos_bytes = None
- 
         # Try to restore from localStorage on first load
         if not st.session_state.price_tag_restored:
             restored_items = restore_session()
@@ -897,7 +892,7 @@ class PriceTagPage:
 
         if st.session_state.get("thermal_pdf_ready") and st.session_state.get("thermal_pdf_bytes"):
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            col_print, col_dl, col_escpos = st.columns([1, 1, 1])
+            col_print, col_dl = st.columns([1, 1])
 
             with col_print:
                 if st.button("🖨️ Print Thermal", type="primary", use_container_width=True):
@@ -952,102 +947,6 @@ class PriceTagPage:
                     use_container_width=True,
                 )
 
-            with col_escpos:
-                # Generate ESC/POS on button click
-                if st.button("🔌 Generate ESC/POS", type="secondary", use_container_width=True):
-                    try:
-                        items = self._build_thermal_items(st.session_state.thermal_lines if st.session_state.get('thermal_lines') else [])
-                        if items:
-                            escpos_bytes = self.service.generate_escpos_labels(
-                                items,
-                                width_mm=18.0 if st.session_state.thermal_rotate else 28.0,
-                                height_mm=28.0 if st.session_state.thermal_rotate else 18.0,
-                            )
-                            st.session_state.thermal_escpos_ready = True
-                            st.session_state.thermal_escpos_bytes = escpos_bytes
-                            st.toast(f"✅ ESC/POS commands generated: {len(escpos_bytes)} bytes", icon="🔌")
-                        else:
-                            st.error("Tidak ada item untuk generate ESC/POS")
-                    except ImportError as e:
-                        st.error(f"Library ESC/POS tidak tersedia: {e}")
-                        st.info("Install: `pip install python-escpos pyusb`")
-                    except Exception as e:
-                        st.error(f"Gagal generate ESC/POS: {e}")
-
-        # ESC/POS Download Section
-        if st.session_state.get("thermal_escpos_ready") and st.session_state.get("thermal_escpos_bytes"):
-            st.divider()
-            st.caption("📟 ESC/POS Direct Printing (bypass PDF rasterization)")
-            
-            escpos_col1, escpos_col2, escpos_col3 = st.columns([1, 1, 1])
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            
-            with escpos_col1:
-                st.download_button(
-                    label="⬇️ Download .bin (raw)",
-                    data=st.session_state.thermal_escpos_bytes,
-                    file_name=f"thermal_labels_{timestamp}.bin",
-                    mime="application/octet-stream",
-                    type="primary",
-                    use_container_width=True,
-                )
-            
-            with escpos_col2:
-                if st.button("💾 Save to session_data/", type="secondary", use_container_width=True):
-                    try:
-                        save_path = f"session_data/thermal_labels_{timestamp}.bin"
-                        self.service.save_escpos_to_file(st.session_state.thermal_escpos_bytes, save_path)
-                        st.success(f"Saved to {save_path}")
-                    except Exception as e:
-                        st.error(f"Gagal save: {e}")
-            
-            with escpos_col3:
-                # USB Direct Print (requires pyusb and proper driver - LOCAL ONLY)
-                if st.button("🔌 Print USB Direct", type="secondary", use_container_width=True):
-                    try:
-                        success = self.service.print_escpos_to_usb(st.session_state.thermal_escpos_bytes)
-                        if success:
-                            st.success("✅ Data sent to printer!")
-                        else:
-                            st.error("❌ Failed to send to printer. Check USB connection and drivers.")
-                            st.info("Tip: Install libusbK driver for Xprinter on Windows")
-                    except Exception as e:
-                        st.error(f"USB print error: {e}")
-            
-            # Cloud Print via Web Serial API (works from anywhere)
-            st.divider()
-            escpos_cloud_col1, escpos_cloud_col2 = st.columns([1, 1])
-            with escpos_cloud_col1:
-                if st.button("☁️ Print via Browser (Cloud)", type="primary", use_container_width=True):
-                    try:
-                        from utils.escpos_cloud_bridge import ESCPOSCloudBridge
-                        bridge = ESCPOSCloudBridge()
-                        result = bridge.print_direct(st.session_state.thermal_escpos_bytes)
-                        if result.get('success'):
-                            st.success("🖨️ Check your browser for USB printer selection!")
-                            st.info("Your browser will send ESC/POS commands directly to the printer.")
-                        else:
-                            st.error(f"❌ {result.get('error', 'Failed to open print dialog')}")
-                    except Exception as e:
-                        st.error(f"Cloud print error: {e}")
-            
-            with escpos_cloud_col2:
-                with st.expander("ℹ️ About Cloud Printing"):
-                    st.markdown("""
-                    **Browser Direct Printing**
-                    
-                    This uses the **Web Serial API** to send ESC/POS commands directly from your browser to the USB printer.
-                    
-                    **Benefits:**
-                    - ✅ Works from Streamlit Cloud (no local Python needed)
-                    - ✅ No driver changes required
-                    - ✅ Chrome/Edge native support
-                    
-                    **Requirements:**
-                    - Chrome or Edge browser (v89+)
-                    - HTTPS or localhost connection
-                    - Grant USB permission when prompted
-                    """)
     
     def render_pdf_section(self):
         """Render PDF generation and download section."""
