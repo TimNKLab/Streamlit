@@ -135,7 +135,10 @@ class ESCPOSCloudBridge:
         """
         
         # Render component
-        result = components.html(html_with_iframe, height=height, key=self.key)
+        # NOTE: `st.components.v1.html()` does not accept a `key` argument in
+        # some Streamlit versions; passing it raises:
+        # IframeMixin._html() got an unexpected keyword argument 'key'
+        result = components.html(html_with_iframe, height=height)
         
         return result
     
@@ -259,7 +262,8 @@ class ESCPOSCloudBridge:
         """
         
         # Display as component
-        components.html(auto_print_html, height=180, key=f"{self.key}_print")
+        # See note in embed(): avoid passing unsupported `key`.
+        components.html(auto_print_html, height=180)
         
         return {'success': True, 'message': 'Print dialog opened - check browser for USB permission prompt'}
     
