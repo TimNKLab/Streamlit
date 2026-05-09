@@ -803,10 +803,12 @@ class PriceTagPage:
 
         try:
             with st.spinner("Membuat PDF thermal..."):
+                # Default: portrait 18x28 (18mm wide, 28mm tall) - feeds vertically
+                # Rotated: landscape 28x18 (28mm wide, 18mm tall) - feeds horizontally
                 if st.session_state.thermal_rotate:
-                    pdf_bytes = self.service.generate_thermal_labels_pdf(items, width_mm=18.0, height_mm=28.0)
-                else:
                     pdf_bytes = self.service.generate_thermal_labels_pdf(items, width_mm=28.0, height_mm=18.0)
+                else:
+                    pdf_bytes = self.service.generate_thermal_labels_pdf(items, width_mm=18.0, height_mm=28.0)
 
             if not pdf_bytes or len(pdf_bytes) < 100:
                 st.error("PDF yang dihasilkan kosong atau tidak valid")
@@ -821,7 +823,7 @@ class PriceTagPage:
     def render_thermal_section(self):
         st.subheader("Thermal Label Generator (18mm x 28mm)")
 
-        st.checkbox("Rotate 90° (swap 28x18)", key="thermal_rotate")
+        st.checkbox("Rotate to landscape (28×18 horizontal)", key="thermal_rotate", help="Default is portrait 18×28. Check this if your printer feeds labels horizontally.")
 
         with st.expander("🧾 Ambil dari Vendor Bill (Odoo)", expanded=True):
             st.text_input("Nomor Vendor Bill", key="thermal_vendor_bill_number")
