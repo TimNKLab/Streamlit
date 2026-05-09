@@ -1060,7 +1060,10 @@ class PriceTagPage:
                     - HTTPS or localhost connection
                     - Grant USB permission when prompted
                     """)
+<<<<<<< HEAD
 >>>>>>> 0c6e432 (rollup)
+=======
+>>>>>>> 0c6e43234b30fb883d87b5d28c76d71a5ebf3f35
     
     def render_pdf_section(self):
         """Render PDF generation and download section."""
