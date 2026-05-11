@@ -654,7 +654,7 @@ class PriceTagService:
         W: float,
         H: float,
     ):
-        """Draw a mini price tag (55mm x 25mm) - vertical name/price/code layout."""
+        """Draw a mini price tag (55mm x 25mm) - same layout as standard, smaller."""
         if not HAS_REPORTLAB:
             return
 
@@ -662,65 +662,89 @@ class PriceTagService:
         name = str(item.get("name", "")).strip()
         het = item.get("het")
         diskon = item.get("diskon")
-        barcode_short = barcode_val[-6:] if len(barcode_val) >= 6 else barcode_val
         date_str = self.today_str()
+        barcode_short = barcode_val[-6:] if len(barcode_val) >= 6 else barcode_val
 
-        # Padding
-        PAD = 1.0
-        inner_w = W - 2 * PAD
-        inner_h = H - 2 * PAD
+        # Same zone proportions as standard tag
+        info_h = H * 0.20
+        name_h = H * 0.30
+        price_h = H * 0.50
+        info_y = ty
+        name_y = ty + info_h
+        price_y = ty + info_h + name_h
+        PAD = 1.5
 
         # Draw border (same style as standard tag)
         c.setStrokeColorRGB(*_hex_to_rgb("#333333"))
         c.setLineWidth(0.5)
         c.rect(tx, ty, W, H, stroke=1, fill=0)
 
-        # Zone heights (percentages)
-        name_zone_h = inner_h * 0.30
-        price_zone_h = inner_h * 0.45
-        bottom_zone_h = inner_h * 0.25
+        # Divider lines (same as standard)
+        c.setLineWidth(0.3)
+        c.line(tx, name_y, tx + W, name_y)
+        c.line(tx, price_y, tx + W, price_y)
+        c.line(tx + W / 2, info_y, tx + W / 2, name_y)
 
-        # Vertical positions (from bottom)
-        bottom_y = ty + PAD
-        price_y = bottom_y + bottom_zone_h
-        name_y = price_y + price_zone_h
+        inner_price_x = tx + PAD
+        inner_price_w = W - 2 * PAD
 
-        # Zone 1: Product name (top) - auto-resize font like standard tag
-        name_fs = self._fit_fontsize(name, self.MAIN_FONT_BOLD, inner_w, size_max=11, size_min=6)
-        c.setFont(self.MAIN_FONT_BOLD, name_fs)
-        c.setFillColorRGB(*_hex_to_rgb("#000000"))
+        # Price zone - same logic as standard (strikethrough + big discount)
+        if diskon and het:
+            het_zone_h = price_h * 0.28
+            het_zone_y = price_y + price_h - het_zone_h
+            het_text = self.format_price(het)
+            het_fs = 6  # slightly smaller for mini
+            c.setFont(self.MAIN_FONT, het_fs)
+            c.setFillColorRGB(*_hex_to_rgb("#888888"))
+            het_w = _str_width(het_text, self.MAIN_FONT, het_fs)
+            het_tx = inner_price_x + (inner_price_w - het_w) / 2
+            het_ty = het_zone_y + (het_zone_h - het_fs) / 2
+            c.drawString(het_tx, het_ty, het_text)
+            strike_y = het_ty + het_fs * 0.35
+            c.setLineWidth(0.6)
+            c.setStrokeColorRGB(*_hex_to_rgb("#888888"))
+            c.line(het_tx, strike_y, het_tx + het_w, strike_y)
+            c.setStrokeColorRGB(*_hex_to_rgb("#333333"))
+            self._draw_text_block(
+                c, self.format_price(diskon), self.MAIN_FONT_BOLD, "#000000",
+                inner_price_x, price_y, inner_price_w, price_h * 0.72,
+                size_max=24, size_min=8, valign="middle",
+            )
+        elif het:
+            self._draw_text_block(
+                c, self.format_price(het), self.MAIN_FONT_BOLD, "#000000",
+                inner_price_x, price_y, inner_price_w, price_h,
+                size_max=24, size_min=8, valign="middle",
+            )
+        else:
+            self._draw_text_block(
+                c, "- Harga -", self.MAIN_FONT, "#999999",
+                inner_price_x, price_y, inner_price_w, price_h,
+                size_max=10, size_min=6, valign="middle",
+            )
 
-        name_w = _str_width(name, self.MAIN_FONT_BOLD, name_fs)
-        name_x = tx + PAD + (inner_w - name_w) / 2
-        name_text_y = name_y + (name_zone_h - name_fs) / 2
-        c.drawString(name_x, name_text_y, name)
+        # Name zone - auto-resize like standard
+        self._draw_text_block(
+            c, name, self.MAIN_FONT, "#000000",
+            tx + PAD, name_y, W - 2 * PAD, name_h,
+            size_max=11, size_min=6, valign="middle",
+        )
 
-        # Zone 2: Price (middle)
-        price_fs = min(14, int(H * 0.50))
-        c.setFont(self.MAIN_FONT_BOLD, price_fs)
-        c.setFillColorRGB(*_hex_to_rgb("#000000"))
+        # Info zone left: barcode short
+        self._draw_text_block(
+            c, barcode_short, self.MAIN_FONT, "#000000",
+            tx + PAD, info_y, W / 2 - 2 * PAD, info_h,
+            size_max=9, size_min=5, valign="middle",
+        )
 
-        # Show diskon if exists, otherwise het
-        price_text = self.format_price(diskon) if diskon else self.format_price(het)
-        price_w = _str_width(price_text, self.MAIN_FONT_BOLD, price_fs)
-        price_x = tx + PAD + (inner_w - price_w) / 2
-        price_text_y = price_y + (price_zone_h - price_fs) / 2
-        c.drawString(price_x, price_text_y, price_text)
-
-        # Zone 3: Bottom row (code left, date right)
-        bottom_fs = min(6, int(H * 0.20))
-        c.setFont(self.MAIN_FONT, bottom_fs)
-        c.setFillColorRGB(*_hex_to_rgb("#666666"))
-
-        # Left: barcode short
-        bc_x = tx + PAD + 2  # slight inset from left
-        bc_text_y = bottom_y + (bottom_zone_h - bottom_fs) / 2
-        c.drawString(bc_x, bc_text_y, barcode_short)
-
-        # Right: date
-        date_w = _str_width(date_str, self.MAIN_FONT, bottom_fs)
-        date_x = tx + PAD + inner_w - date_w - 2  # slight inset from right
-        c.drawString(date_x, bc_text_y, date_str)
+        # Info zone right: date only (no "Terakhir diupdate" label)
+        right_x = tx + W / 2
+        right_w = W / 2
+        date_fs = 7
+        c.setFont(self.MAIN_FONT, date_fs)
+        c.setFillColorRGB(*_hex_to_rgb("#222222"))
+        dw = _str_width(date_str, self.MAIN_FONT, date_fs)
+        c.drawString(right_x + (right_w - dw) / 2, info_y + (info_h - date_fs) / 2, date_str)
 
     # ------------------------------------------------------------------
     # PDF generation
