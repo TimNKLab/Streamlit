@@ -90,6 +90,12 @@ def _str_width(text: str, font: str, size: int) -> float:
 class PriceTagService:
     """Service for price tag generation and product database management."""
 
+    # Tag size presets (width, height in cm)
+    TAG_PRESETS = {
+        "standard": (4.8, 3.0),      # 48mm x 30mm - original size
+        "mini": (0.7, 0.2),          # 7mm x 2mm - new small size
+    }
+
     TAG_W = 4.8 * cm
     TAG_H = 3 * cm
 
@@ -516,8 +522,27 @@ class PriceTagService:
                     start_y -= leading
                 return
 
-    def _draw_tag(self, c, item: Dict[str, Any], tx: float, ty: float):
-        """Draw one price tag at (tx, ty).  Colours fetched from module-level cache."""
+    def _draw_tag(
+        self,
+        c,
+        item: Dict[str, Any],
+        tx: float,
+        ty: float,
+        TAG_W: float,
+        TAG_H: float,
+        size_preset: str = "standard",
+    ):
+        """Draw one price tag at (tx, ty).  Colours fetched from module-level cache.
+
+        Args:
+            c: Canvas
+            item: Product data dict
+            tx: X position
+            ty: Y position
+            TAG_W: Tag width
+            TAG_H: Tag height
+            size_preset: "standard" (48x30mm) or "mini" (70x20mm)
+        """
         if not HAS_REPORTLAB:
             return
 
@@ -528,8 +553,14 @@ class PriceTagService:
         date_str = self.today_str()
         barcode_short = barcode_val[-6:] if len(barcode_val) >= 6 else barcode_val
 
-        W, H = self.TAG_W, self.TAG_H
+        W, H = TAG_W, TAG_H
 
+        # Different layout for mini tags
+        if size_preset == "mini":
+            self._draw_mini_tag(c, item, tx, ty, W, H)
+            return
+
+        # Standard tag layout (original)
         c.setStrokeColorRGB(*_hex_to_rgb("#333333"))
         c.setLineWidth(0.5)
         c.rect(tx, ty, W, H, stroke=1, fill=0)
@@ -614,13 +645,139 @@ class PriceTagService:
         dw = _str_width(date_str, self.MAIN_FONT, date_fs)
         c.drawString(right_x + (right_w - dw) / 2, info_y + (date_h_frac - date_fs) / 2, date_str)
 
+    def _draw_mini_tag(
+        self,
+        c,
+        item: Dict[str, Any],
+        tx: float,
+        ty: float,
+        W: float,
+        H: float,
+    ):
+        """Draw a mini price tag (7mm x 2mm) - ultra-compact single-line layout."""
+        if not HAS_REPORTLAB:
+            return
+
+        barcode_val = str(item.get("barcode", "")).strip()
+        name = str(item.get("name", "")).strip()
+        het = item.get("het")
+        diskon = item.get("diskon")
+        barcode_short = barcode_val[-6:] if len(barcode_val) >= 6 else barcode_val
+
+        # Ultra-tight padding for 7mm x 2mm tags
+        PAD = 0.5
+        inner_w = W - 2 * PAD
+
+        # Draw border
+        c.setStrokeColorRGB(*_hex_to_rgb("#333333"))
+        c.setLineWidth(0.2)
+        c.rect(tx, ty, W, H, stroke=1, fill=0)
+
+        # Layout: 3 zones horizontally for mini tag
+        # [Barcode | Name | Price]
+        zone1_w = inner_w * 0.25  # Barcode (25%)
+        zone2_w = inner_w * 0.40  # Name (40%)
+        zone3_w = inner_w * 0.35  # Price (35%)
+
+        zone1_x = tx + PAD
+        zone2_x = zone1_x + zone1_w + PAD
+        zone3_x = zone2_x + zone2_w + PAD
+
+        # Divider lines
+        line_y1 = ty + PAD
+        line_y2 = ty + H - PAD
+        c.setLineWidth(0.1)
+        c.line(zone2_x - PAD/2, line_y1, zone2_x - PAD/2, line_y2)
+        c.line(zone3_x - PAD/2, line_y1, zone3_x - PAD/2, line_y2)
+
+        # Zone 1: Barcode (last 6 digits)
+        barcode_fs = min(4, int(H * 0.35))
+        c.setFont(self.MAIN_FONT_BOLD, barcode_fs)
+        c.setFillColorRGB(*_hex_to_rgb("#000000"))
+        bc_w = _str_width(barcode_short, self.MAIN_FONT_BOLD, barcode_fs)
+        bc_x = zone1_x + (zone1_w - bc_w) / 2
+        bc_y = ty + (H - barcode_fs) / 2
+        c.drawString(bc_x, bc_y, barcode_short)
+
+        # Zone 2: Product name (truncated to fit)
+        name_fs = min(5, int(H * 0.45))
+        # Truncate name if too long
+        display_name = name
+        while _str_width(display_name, self.MAIN_FONT, name_fs) > zone2_w and len(display_name) > 2:
+            display_name = display_name[:-1]
+        if len(display_name) < len(name):
+            display_name = display_name[:-1] + "…"
+        c.setFont(self.MAIN_FONT, name_fs)
+        c.setFillColorRGB(*_hex_to_rgb("#000000"))
+        name_w = _str_width(display_name, self.MAIN_FONT, name_fs)
+        name_x = zone2_x + (zone2_w - name_w) / 2
+        name_y = ty + (H - name_fs) / 2
+        c.drawString(name_x, name_y, display_name)
+
+        # Zone 3: Price (with strikethrough for discount)
+        if diskon and het:
+            # Show both original and discount
+            het_fs = min(4, int(H * 0.30))
+            diskon_fs = min(7, int(H * 0.55))
+
+            # Original price (small, strikethrough)
+            het_text = self.format_price(het)
+            c.setFont(self.MAIN_FONT, het_fs)
+            c.setFillColorRGB(*_hex_to_rgb("#888888"))
+            het_w = _str_width(het_text, self.MAIN_FONT, het_fs)
+            het_x = zone3_x + (zone3_w - het_w) / 2
+            het_y = ty + H * 0.65
+            c.drawString(het_x, het_y, het_text)
+            # Strikethrough
+            strike_y = het_y + het_fs * 0.35
+            c.setLineWidth(0.3)
+            c.setStrokeColorRGB(*_hex_to_rgb("#888888"))
+            c.line(het_x, strike_y, het_x + het_w, strike_y)
+
+            # Discount price (larger)
+            diskon_text = self.format_price(diskon)
+            c.setFont(self.MAIN_FONT_BOLD, diskon_fs)
+            c.setFillColorRGB(*_hex_to_rgb("#000000"))
+            dsk_w = _str_width(diskon_text, self.MAIN_FONT_BOLD, diskon_fs)
+            dsk_x = zone3_x + (zone3_w - dsk_w) / 2
+            dsk_y = ty + H * 0.20
+            c.drawString(dsk_x, dsk_y, diskon_text)
+        elif het:
+            price_text = self.format_price(het)
+            price_fs = min(9, int(H * 0.60))
+            # Adjust font size to fit
+            while _str_width(price_text, self.MAIN_FONT_BOLD, price_fs) > zone3_w and price_fs > 4:
+                price_fs -= 1
+            c.setFont(self.MAIN_FONT_BOLD, price_fs)
+            c.setFillColorRGB(*_hex_to_rgb("#000000"))
+            price_w = _str_width(price_text, self.MAIN_FONT_BOLD, price_fs)
+            price_x = zone3_x + (zone3_w - price_w) / 2
+            price_y = ty + (H - price_fs) / 2
+            c.drawString(price_x, price_y, price_text)
+        else:
+            c.setFont(self.MAIN_FONT, 4)
+            c.setFillColorRGB(*_hex_to_rgb("#999999"))
+            c.drawString(zone3_x + PAD, ty + H/2, "-")
+
     # ------------------------------------------------------------------
     # PDF generation
     # ------------------------------------------------------------------
 
-    def generate_pdf(self, items: List[Dict[str, Any]], output_path: Optional[str] = None) -> bytes:
+    def generate_pdf(
+        self,
+        items: List[Dict[str, Any]],
+        output_path: Optional[str] = None,
+        size_preset: str = "standard",
+    ) -> bytes:
         if not HAS_REPORTLAB:
             raise ImportError("reportlab required: pip install reportlab")
+
+        # Get tag dimensions from preset
+        if size_preset not in self.TAG_PRESETS:
+            size_preset = "standard"
+        tag_w_cm, tag_h_cm = self.TAG_PRESETS[size_preset]
+        TAG_W = tag_w_cm * cm
+        TAG_H = tag_h_cm * cm
 
         PAGE_W, PAGE_H = A4
         MARGIN_X = 0.3 * cm
@@ -628,8 +785,8 @@ class PriceTagService:
         GAP_X = 0.2 * cm
         GAP_Y = 0.3 * cm
 
-        cols = max(1, int((PAGE_W - 2 * MARGIN_X + GAP_X) / (self.TAG_W + GAP_X)))
-        rows_per_page = max(1, int((PAGE_H - 2 * MARGIN_Y + GAP_Y) / (self.TAG_H + GAP_Y)))
+        cols = max(1, int((PAGE_W - 2 * MARGIN_X + GAP_X) / (TAG_W + GAP_X)))
+        rows_per_page = max(1, int((PAGE_H - 2 * MARGIN_Y + GAP_Y) / (TAG_H + GAP_Y)))
         per_page = cols * rows_per_page
 
         buffer = io.BytesIO()
@@ -640,9 +797,9 @@ class PriceTagService:
             for i, item in enumerate(page_items):
                 col = i % cols
                 row = i // cols
-                tx = MARGIN_X + col * (self.TAG_W + GAP_X)
-                ty = PAGE_H - MARGIN_Y - (row + 1) * self.TAG_H - row * GAP_Y
-                self._draw_tag(c, item, tx, ty)
+                tx = MARGIN_X + col * (TAG_W + GAP_X)
+                ty = PAGE_H - MARGIN_Y - (row + 1) * TAG_H - row * GAP_Y
+                self._draw_tag(c, item, tx, ty, TAG_W, TAG_H, size_preset)
             if page_start + per_page < len(items):
                 c.showPage()
 

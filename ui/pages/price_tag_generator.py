@@ -99,6 +99,8 @@ class PriceTagPage:
             'thermal_pdf_ready': False,
             'thermal_pdf_bytes': None,
             'thermal_rotate': True,
+            'price_tag_size_preset': 'standard',  # 'standard' or 'mini'
+            'price_tag_pdf_size_preset': None,
         }
         for key, val in defaults.items():
             if key not in ss:
@@ -126,10 +128,11 @@ class PriceTagPage:
         # Invalidate PDF if items changed
         if ss.price_tag_pdf_ready:
             current_hash = self._get_items_hash()
-            if ss.price_tag_items_hash != current_hash:
+            if ss.price_tag_items_hash != current_hash or ss.price_tag_pdf_size_preset != ss.price_tag_size_preset:
                 ss.price_tag_pdf_ready = False
                 ss.price_tag_pdf_bytes = None
                 ss.price_tag_items_hash = None
+                ss.price_tag_pdf_size_preset = None
 
     # ------------------------------------------------------------------
     # Helpers
@@ -399,10 +402,12 @@ class PriceTagPage:
                 with st.spinner("🔄 Membuat PDF..."):
                     valid = self._collect_valid_items()
                     if valid:
-                        pdf_bytes = self.service.generate_pdf(valid)
+                        size_preset = st.session_state.price_tag_size_preset
+                        pdf_bytes = self.service.generate_pdf(valid, size_preset=size_preset)
                         st.session_state.price_tag_pdf_bytes = pdf_bytes
                         st.session_state.price_tag_pdf_ready = True
-                        st.success(f"✅ PDF berhasil dibuat: {len(valid)} item ({len(pdf_bytes):,} bytes)")
+                        size_name = "48mm × 30mm" if size_preset == "standard" else "7mm × 2mm"
+                        st.success(f"✅ PDF berhasil dibuat: {len(valid)} item ({size_name}, {len(pdf_bytes):,} bytes)")
                     else:
                         st.error("❌ Tidak ada item valid untuk dicetak")
             else:
@@ -577,7 +582,8 @@ class PriceTagPage:
 
         try:
             with st.spinner("🔄 Membuat PDF..."):
-                pdf_bytes = self.service.generate_pdf(items)
+                size_preset = st.session_state.price_tag_size_preset
+                pdf_bytes = self.service.generate_pdf(items, size_preset=size_preset)
 
             if not pdf_bytes or len(pdf_bytes) < _EMPTY_PDF_THRESHOLD:
                 st.error("❌ PDF yang dihasilkan kosong atau tidak valid")
@@ -586,6 +592,7 @@ class PriceTagPage:
             st.session_state.price_tag_pdf_bytes = pdf_bytes
             st.session_state.price_tag_pdf_ready = True
             st.session_state.price_tag_items_hash = self._get_items_hash()
+            st.session_state.price_tag_pdf_size_preset = size_preset
             st.toast(f"✅ {len(items)} label berhasil dibuat!", icon="✅")
 
         except ImportError as e:
@@ -601,6 +608,21 @@ class PriceTagPage:
 
     def render_pdf_section(self):
         st.markdown("---")
+        
+        # Tag size selector
+        size_preset = st.selectbox(
+            "📏 Ukuran Tag",
+            options=["standard", "mini"],
+            format_func=lambda x: "Standard (48mm × 30mm)" if x == "standard" else "Mini (7mm × 2mm)",
+            index=0 if st.session_state.price_tag_size_preset == "standard" else 1,
+            key="price_tag_size_selector",
+        )
+        if size_preset != st.session_state.price_tag_size_preset:
+            st.session_state.price_tag_size_preset = size_preset
+            st.session_state.price_tag_pdf_ready = False
+            st.session_state.price_tag_pdf_bytes = None
+            st.rerun()
+        
         items = self._collect_valid_items()
 
         if items:
@@ -627,6 +649,7 @@ class PriceTagPage:
             with col2:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 pdf_bytes = ss.price_tag_pdf_bytes
+                size_name = "48mm × 30mm" if ss.price_tag_size_preset == "standard" else "7mm × 2mm"
                 st.download_button(
                     label=f"⬇️ Download ({len(pdf_bytes) // 1024} KB)",
                     data=pdf_bytes,
@@ -635,7 +658,7 @@ class PriceTagPage:
                     type="primary",
                     use_container_width=True,
                 )
-            st.caption(f"📄 PDF berisi {len(items)} label (6cm x 4cm) siap cetak")
+            st.caption(f"📄 PDF berisi {len(items)} label ({size_name}) siap cetak")
             if st.button("🗑️ Clear PDF", type="secondary"):
                 ss.price_tag_pdf_ready = False
                 ss.price_tag_pdf_bytes = None
