@@ -93,7 +93,7 @@ class PriceTagService:
     # Tag size presets (width, height in cm)
     TAG_PRESETS = {
         "standard": (4.8, 3.0),      # 48mm x 30mm - original size
-        "mini": (0.7, 0.2),          # 7mm x 2mm - new small size
+        "mini": (5.5, 2.5),          # 55mm x 25mm - new small size
     }
 
     TAG_W = 4.8 * cm
@@ -654,7 +654,7 @@ class PriceTagService:
         W: float,
         H: float,
     ):
-        """Draw a mini price tag (7mm x 2mm) - ultra-compact single-line layout."""
+        """Draw a mini price tag (55mm x 25mm) - vertical name/price/code layout."""
         if not HAS_REPORTLAB:
             return
 
@@ -663,101 +663,64 @@ class PriceTagService:
         het = item.get("het")
         diskon = item.get("diskon")
         barcode_short = barcode_val[-6:] if len(barcode_val) >= 6 else barcode_val
+        date_str = self.today_str()
 
-        # Ultra-tight padding for 7mm x 2mm tags
-        PAD = 0.5
+        # Padding
+        PAD = 1.0
         inner_w = W - 2 * PAD
+        inner_h = H - 2 * PAD
 
-        # Draw border
+        # Draw border (same style as standard tag)
         c.setStrokeColorRGB(*_hex_to_rgb("#333333"))
-        c.setLineWidth(0.2)
+        c.setLineWidth(0.5)
         c.rect(tx, ty, W, H, stroke=1, fill=0)
 
-        # Layout: 3 zones horizontally for mini tag
-        # [Barcode | Name | Price]
-        zone1_w = inner_w * 0.25  # Barcode (25%)
-        zone2_w = inner_w * 0.40  # Name (40%)
-        zone3_w = inner_w * 0.35  # Price (35%)
+        # Zone heights (percentages)
+        name_zone_h = inner_h * 0.30
+        price_zone_h = inner_h * 0.45
+        bottom_zone_h = inner_h * 0.25
 
-        zone1_x = tx + PAD
-        zone2_x = zone1_x + zone1_w + PAD
-        zone3_x = zone2_x + zone2_w + PAD
+        # Vertical positions (from bottom)
+        bottom_y = ty + PAD
+        price_y = bottom_y + bottom_zone_h
+        name_y = price_y + price_zone_h
 
-        # Divider lines
-        line_y1 = ty + PAD
-        line_y2 = ty + H - PAD
-        c.setLineWidth(0.1)
-        c.line(zone2_x - PAD/2, line_y1, zone2_x - PAD/2, line_y2)
-        c.line(zone3_x - PAD/2, line_y1, zone3_x - PAD/2, line_y2)
-
-        # Zone 1: Barcode (last 6 digits)
-        barcode_fs = min(4, int(H * 0.35))
-        c.setFont(self.MAIN_FONT_BOLD, barcode_fs)
+        # Zone 1: Product name (top) - auto-resize font like standard tag
+        name_fs = self._fit_fontsize(name, self.MAIN_FONT_BOLD, inner_w, size_max=11, size_min=6)
+        c.setFont(self.MAIN_FONT_BOLD, name_fs)
         c.setFillColorRGB(*_hex_to_rgb("#000000"))
-        bc_w = _str_width(barcode_short, self.MAIN_FONT_BOLD, barcode_fs)
-        bc_x = zone1_x + (zone1_w - bc_w) / 2
-        bc_y = ty + (H - barcode_fs) / 2
-        c.drawString(bc_x, bc_y, barcode_short)
 
-        # Zone 2: Product name (truncated to fit)
-        name_fs = min(5, int(H * 0.45))
-        # Truncate name if too long
-        display_name = name
-        while _str_width(display_name, self.MAIN_FONT, name_fs) > zone2_w and len(display_name) > 2:
-            display_name = display_name[:-1]
-        if len(display_name) < len(name):
-            display_name = display_name[:-1] + "…"
-        c.setFont(self.MAIN_FONT, name_fs)
+        name_w = _str_width(name, self.MAIN_FONT_BOLD, name_fs)
+        name_x = tx + PAD + (inner_w - name_w) / 2
+        name_text_y = name_y + (name_zone_h - name_fs) / 2
+        c.drawString(name_x, name_text_y, name)
+
+        # Zone 2: Price (middle)
+        price_fs = min(14, int(H * 0.50))
+        c.setFont(self.MAIN_FONT_BOLD, price_fs)
         c.setFillColorRGB(*_hex_to_rgb("#000000"))
-        name_w = _str_width(display_name, self.MAIN_FONT, name_fs)
-        name_x = zone2_x + (zone2_w - name_w) / 2
-        name_y = ty + (H - name_fs) / 2
-        c.drawString(name_x, name_y, display_name)
 
-        # Zone 3: Price (with strikethrough for discount)
-        if diskon and het:
-            # Show both original and discount
-            het_fs = min(4, int(H * 0.30))
-            diskon_fs = min(7, int(H * 0.55))
+        # Show diskon if exists, otherwise het
+        price_text = self.format_price(diskon) if diskon else self.format_price(het)
+        price_w = _str_width(price_text, self.MAIN_FONT_BOLD, price_fs)
+        price_x = tx + PAD + (inner_w - price_w) / 2
+        price_text_y = price_y + (price_zone_h - price_fs) / 2
+        c.drawString(price_x, price_text_y, price_text)
 
-            # Original price (small, strikethrough)
-            het_text = self.format_price(het)
-            c.setFont(self.MAIN_FONT, het_fs)
-            c.setFillColorRGB(*_hex_to_rgb("#888888"))
-            het_w = _str_width(het_text, self.MAIN_FONT, het_fs)
-            het_x = zone3_x + (zone3_w - het_w) / 2
-            het_y = ty + H * 0.65
-            c.drawString(het_x, het_y, het_text)
-            # Strikethrough
-            strike_y = het_y + het_fs * 0.35
-            c.setLineWidth(0.3)
-            c.setStrokeColorRGB(*_hex_to_rgb("#888888"))
-            c.line(het_x, strike_y, het_x + het_w, strike_y)
+        # Zone 3: Bottom row (code left, date right)
+        bottom_fs = min(6, int(H * 0.20))
+        c.setFont(self.MAIN_FONT, bottom_fs)
+        c.setFillColorRGB(*_hex_to_rgb("#666666"))
 
-            # Discount price (larger)
-            diskon_text = self.format_price(diskon)
-            c.setFont(self.MAIN_FONT_BOLD, diskon_fs)
-            c.setFillColorRGB(*_hex_to_rgb("#000000"))
-            dsk_w = _str_width(diskon_text, self.MAIN_FONT_BOLD, diskon_fs)
-            dsk_x = zone3_x + (zone3_w - dsk_w) / 2
-            dsk_y = ty + H * 0.20
-            c.drawString(dsk_x, dsk_y, diskon_text)
-        elif het:
-            price_text = self.format_price(het)
-            price_fs = min(9, int(H * 0.60))
-            # Adjust font size to fit
-            while _str_width(price_text, self.MAIN_FONT_BOLD, price_fs) > zone3_w and price_fs > 4:
-                price_fs -= 1
-            c.setFont(self.MAIN_FONT_BOLD, price_fs)
-            c.setFillColorRGB(*_hex_to_rgb("#000000"))
-            price_w = _str_width(price_text, self.MAIN_FONT_BOLD, price_fs)
-            price_x = zone3_x + (zone3_w - price_w) / 2
-            price_y = ty + (H - price_fs) / 2
-            c.drawString(price_x, price_y, price_text)
-        else:
-            c.setFont(self.MAIN_FONT, 4)
-            c.setFillColorRGB(*_hex_to_rgb("#999999"))
-            c.drawString(zone3_x + PAD, ty + H/2, "-")
+        # Left: barcode short
+        bc_x = tx + PAD + 2  # slight inset from left
+        bc_text_y = bottom_y + (bottom_zone_h - bottom_fs) / 2
+        c.drawString(bc_x, bc_text_y, barcode_short)
+
+        # Right: date
+        date_w = _str_width(date_str, self.MAIN_FONT, bottom_fs)
+        date_x = tx + PAD + inner_w - date_w - 2  # slight inset from right
+        c.drawString(date_x, bc_text_y, date_str)
 
     # ------------------------------------------------------------------
     # PDF generation
