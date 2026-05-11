@@ -406,7 +406,7 @@ class PriceTagPage:
                         pdf_bytes = self.service.generate_pdf(valid, size_preset=size_preset)
                         st.session_state.price_tag_pdf_bytes = pdf_bytes
                         st.session_state.price_tag_pdf_ready = True
-                        size_name = "48mm × 30mm" if size_preset == "standard" else "7mm × 2mm"
+                        size_name = "48mm × 30mm" if size_preset == "standard" else "70mm × 20mm"
                         st.success(f"✅ PDF berhasil dibuat: {len(valid)} item ({size_name}, {len(pdf_bytes):,} bytes)")
                     else:
                         st.error("❌ Tidak ada item valid untuk dicetak")
@@ -613,7 +613,7 @@ class PriceTagPage:
         size_preset = st.selectbox(
             "📏 Ukuran Tag",
             options=["standard", "mini"],
-            format_func=lambda x: "Standard (48mm × 30mm)" if x == "standard" else "Mini (7mm × 2mm)",
+            format_func=lambda x: "Standard (48mm × 30mm)" if x == "standard" else "Mini (55mm × 25mm)",
             index=0 if st.session_state.price_tag_size_preset == "standard" else 1,
             key="price_tag_size_selector",
         )
@@ -649,7 +649,7 @@ class PriceTagPage:
             with col2:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 pdf_bytes = ss.price_tag_pdf_bytes
-                size_name = "48mm × 30mm" if ss.price_tag_size_preset == "standard" else "7mm × 2mm"
+                size_name = "48mm × 30mm" if ss.price_tag_size_preset == "standard" else "55mm × 25mm"
                 st.download_button(
                     label=f"⬇️ Download ({len(pdf_bytes) // 1024} KB)",
                     data=pdf_bytes,
@@ -971,8 +971,16 @@ Saat dialog print Edge terbuka, atur:
         with col2:
             if st.button("🔄 Update harga", type="secondary",
                          help="Force reload price data from file"):
+                try:
+                    self.service._auto_convert_if_needed()
+                except Exception:
+                    pass
                 self.service._last_load_mtime = None
                 self.service._load_parquet_to_memory()
+                st.session_state.price_tag_pdf_ready = False
+                st.session_state.price_tag_pdf_bytes = None
+                st.session_state.price_tag_items_hash = None
+                st.session_state.price_tag_pdf_size_preset = None
                 st.success("Harga sudah terupdate!")
 
         tab_a4, tab_thermal = st.tabs(["A4 Price Tag", "Thermal 18x28mm"])
