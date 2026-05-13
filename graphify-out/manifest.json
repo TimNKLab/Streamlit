@@ -1,0 +1,202 @@
+{
+  "D:\\NKLabs\\Streamlit\\app.py": {
+    "mtime": 1778299177.0366452,
+    "hash": "b9d57cddc5116fe13f6a0be94371f0d8"
+  },
+  "D:\\NKLabs\\Streamlit\\app_original.py": {
+    "mtime": 1763787851.7938433,
+    "hash": "46f8ea71a539e7f042a2bdddc379d297"
+  },
+  "D:\\NKLabs\\Streamlit\\convert_to_duckdb.py": {
+    "mtime": 1778299177.044338,
+    "hash": "e2f8290be003d41d0fe8232f426d4c5c"
+  },
+  "D:\\NKLabs\\Streamlit\\convert_xlsx.py": {
+    "mtime": 1778299177.045572,
+    "hash": "9719c13e70d0ededaec9330a4dc0c5e9"
+  },
+  "D:\\NKLabs\\Streamlit\\test.py": {
+    "mtime": 1778299177.162586,
+    "hash": "e72c574aa84df79c72beaebb6e09faf8"
+  },
+  "D:\\NKLabs\\Streamlit\\test_secrets.py": {
+    "mtime": 1778299177.163986,
+    "hash": "fc7550337e247d8d75f7d1397b176b0a"
+  },
+  "D:\\NKLabs\\Streamlit\\config\\settings.py": {
+    "mtime": 1777617179.3973353,
+    "hash": "e346732b8ae83e75ad2ba33d7d6bae7a"
+  },
+  "D:\\NKLabs\\Streamlit\\logic\\auth.py": {
+    "mtime": 1777617178.0938003,
+    "hash": "0c3bdd8ad3b3fd9950c535bd5a14fa77"
+  },
+  "D:\\NKLabs\\Streamlit\\logic\\escpos_label_printer.py": {
+    "mtime": 1778299177.1322083,
+    "hash": "6e73604f65c7c7263f700064e661496d"
+  },
+  "D:\\NKLabs\\Streamlit\\logic\\excel_utils.py": {
+    "mtime": 1764400131.253495,
+    "hash": "54dade3ede6d80fdf04aba5d5ec12c8a"
+  },
+  "D:\\NKLabs\\Streamlit\\logic\\indexeddb_price_sync.py": {
+    "mtime": 1778299177.1332307,
+    "hash": "a95936e16b1860e0f300a925fa7532a0"
+  },
+  "D:\\NKLabs\\Streamlit\\logic\\odoo_price_sync.py": {
+    "mtime": 1778299177.1356418,
+    "hash": "fa4661e6dc9e768b5a08a876d7d455a0"
+  },
+  "D:\\NKLabs\\Streamlit\\logic\\price_tag_service.py": {
+    "mtime": 1778489244.528322,
+    "hash": "9397fd385ca03f21ff9f4354b8839f83"
+  },
+  "D:\\NKLabs\\Streamlit\\logic\\sales_processor.py": {
+    "mtime": 1764400157.445077,
+    "hash": "2e759cbb68119f59700962898d2a468e"
+  },
+  "D:\\NKLabs\\Streamlit\\logic\\stock_card.py": {
+    "mtime": 1778299177.1396267,
+    "hash": "030141f134211714e7371c643e36a1af"
+  },
+  "D:\\NKLabs\\Streamlit\\logic\\stock_processor.py": {
+    "mtime": 1763788434.715276,
+    "hash": "066ad4e81b5c3a046e7a25a9d5ed9e38"
+  },
+  "D:\\NKLabs\\Streamlit\\logic\\__init__.py": {
+    "mtime": 1778299177.1164265,
+    "hash": "a4b26409854809857fbf185007661157"
+  },
+  "D:\\NKLabs\\Streamlit\\odoo\\connection.py": {
+    "mtime": 1778299177.1526253,
+    "hash": "da1bbceae74025e2e32f93d1673ad2aa"
+  },
+  "D:\\NKLabs\\Streamlit\\odoo\\services.py": {
+    "mtime": 1778299177.154689,
+    "hash": "8729cd0a1295033915f65d5b271922a6"
+  },
+  "D:\\NKLabs\\Streamlit\\odoo\\stock_services.py": {
+    "mtime": 1778299177.1557012,
+    "hash": "b06e801c6e7b2d51bd55410c1204fa2b"
+  },
+  "D:\\NKLabs\\Streamlit\\odoo\\vendor_bill_services.py": {
+    "mtime": 1778299177.1579404,
+    "hash": "e2517ce34de9216270026570c7a6ead2"
+  },
+  "D:\\NKLabs\\Streamlit\\odoo\\__init__.py": {
+    "mtime": 1778299177.141639,
+    "hash": "1dd5495d3a16f2b025fe3379eefed750"
+  },
+  "D:\\NKLabs\\Streamlit\\scripts\\test_odoo_connection.py": {
+    "mtime": 1764319210.15954,
+    "hash": "1618acd45e6b97ab4bf68aeb091c133f"
+  },
+  "D:\\NKLabs\\Streamlit\\tests\\test_indexeddb_bridge.py": {
+    "mtime": 1778299177.1650014,
+    "hash": "fa6d95a99b4f34619f1cd3814c2b6ede"
+  },
+  "D:\\NKLabs\\Streamlit\\ui\\__init__.py": {
+    "mtime": 1763788449.9682612,
+    "hash": "3d7384b952db031db57cbac020dd0c85"
+  },
+  "D:\\NKLabs\\Streamlit\\ui\\components\\auth_components.py": {
+    "mtime": 1777617178.297642,
+    "hash": "14e7965f6428efc9b6a8156f752f001b"
+  },
+  "D:\\NKLabs\\Streamlit\\ui\\components\\__init__.py": {
+    "mtime": 1763788451.464626,
+    "hash": "ab2b637c5807a8fa68ce257b973044cb"
+  },
+  "D:\\NKLabs\\Streamlit\\ui\\pages\\ba_sales_report.py": {
+    "mtime": 1764415389.2640622,
+    "hash": "983407b6f8804fa1d85990d97381adc1"
+  },
+  "D:\\NKLabs\\Streamlit\\ui\\pages\\dashboard.py": {
+    "mtime": 1778299177.182703,
+    "hash": "64d1b0a6f7dad610ef0e3031344f2737"
+  },
+  "D:\\NKLabs\\Streamlit\\ui\\pages\\dsi_report.py": {
+    "mtime": 1763788446.8680754,
+    "hash": "5c37ea02f81f7f8597e9cfeb93794b6c"
+  },
+  "D:\\NKLabs\\Streamlit\\ui\\pages\\internal_moves.py": {
+    "mtime": 1778299177.1837091,
+    "hash": "ad3eb83479bd118a0fdad88de5ad88dd"
+  },
+  "D:\\NKLabs\\Streamlit\\ui\\pages\\price_sync.py": {
+    "mtime": 1778299177.18533,
+    "hash": "3d46bf784ace4e939f6a886693ebf8bf"
+  },
+  "D:\\NKLabs\\Streamlit\\ui\\pages\\price_tag_generator.py": {
+    "mtime": 1778486047.3092933,
+    "hash": "0d084bcc3d1a4426a5f19b0ccb9ff1d9"
+  },
+  "D:\\NKLabs\\Streamlit\\ui\\pages\\stock_card.py": {
+    "mtime": 1778299177.1891632,
+    "hash": "ba989b598593102e6e0831f1652739e1"
+  },
+  "D:\\NKLabs\\Streamlit\\ui\\pages\\stock_control.py": {
+    "mtime": 1763788445.0784702,
+    "hash": "d44cd56e331df12300cb2fc54ec9f300"
+  },
+  "D:\\NKLabs\\Streamlit\\ui\\pages\\__init__.py": {
+    "mtime": 1778299177.1696942,
+    "hash": "756b30c8c830626b3db8f9d707f25d0e"
+  },
+  "D:\\NKLabs\\Streamlit\\utils\\indexeddb_bridge.py": {
+    "mtime": 1778299177.202267,
+    "hash": "ca2eb8db41434900a1e47b5271e700ab"
+  },
+  "D:\\NKLabs\\Streamlit\\utils\\persistence.py": {
+    "mtime": 1778299177.203127,
+    "hash": "fa8c5a74afb55c68389f0190c2c44ffb"
+  },
+  "D:\\NKLabs\\Streamlit\\utils\\__init__.py": {
+    "mtime": 1778299177.1911614,
+    "hash": "115c5eb1d55ec77c3054601530c4438f"
+  },
+  "D:\\NKLabs\\Streamlit\\documentation.md": {
+    "mtime": 1764323279.1794302,
+    "hash": "e4243cd9a8201a2f8603c9163192f917"
+  },
+  "D:\\NKLabs\\Streamlit\\OPTIMIZATION_CASE_STUDY.md": {
+    "mtime": 1778299177.028004,
+    "hash": "7ebcaa8faad5cda6f848473a7b750b01"
+  },
+  "D:\\NKLabs\\Streamlit\\REFACTORING_SUMMARY.md": {
+    "mtime": 1763788571.1253953,
+    "hash": "ffcf9c3029f91aff4dda4477e61d033f"
+  },
+  "D:\\NKLabs\\Streamlit\\requirements.txt": {
+    "mtime": 1778304123.690322,
+    "hash": "6daf17c42e038d1644c5442556ddc021"
+  },
+  "D:\\NKLabs\\Streamlit\\graphify-out\\converted\\TES TARIK PENJUALAN_ad470a08.md": {
+    "mtime": 1778658908.0895598,
+    "hash": "66ab31847c88e6452a4ab449fb7b3ff8"
+  },
+  "D:\\NKLabs\\Streamlit\\components\\indexeddb_manager.html": {
+    "mtime": 1778299177.0400956,
+    "hash": "acce29243d4c69089346b7e3307461b8"
+  },
+  "D:\\NKLabs\\Streamlit\\graphify-out\\converted\\products_2db91bf5.md": {
+    "mtime": 1778658919.3840542,
+    "hash": "85c1744a33342e85b81daff2b2ae3be9"
+  },
+  "D:\\NKLabs\\Streamlit\\docs\\superpowers\\plans\\2026-05-01-indexeddb-price-sync.md": {
+    "mtime": 1778299177.1118727,
+    "hash": "d0c0d9da9c48a71805607665277ef14d"
+  },
+  "D:\\NKLabs\\Streamlit\\docs\\superpowers\\plans\\2026-05-02-fix-price-sync-history.md": {
+    "mtime": 1778299177.1133022,
+    "hash": "55c1009e16eacb1d60966853a41f522d"
+  },
+  "D:\\NKLabs\\Streamlit\\docs\\superpowers\\plans\\2026-05-11-mini-tag-layout-redesign.md": {
+    "mtime": 1778486901.4548948,
+    "hash": "56bd00e34cbffc427821945e98b551eb"
+  },
+  "D:\\NKLabs\\Streamlit\\docs\\superpowers\\specs\\2026-05-01-indexeddb-price-sync-design.md": {
+    "mtime": 1778299177.1148224,
+    "hash": "1809bbb8997580ce34d0f497ee376d58"
+  }
+}
