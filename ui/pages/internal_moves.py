@@ -121,7 +121,6 @@ def _get_candidate_locations_batch(
     product_ids: Tuple[int, ...],
     exclude_location_id: int,
 ) -> Dict[int, List]:
-    # Tuple arg so st.cache_data dapat hash dengan benar
     return get_candidate_locations_for_products(
         product_ids=list(product_ids),
         exclude_location_id=exclude_location_id,
@@ -140,19 +139,14 @@ def _get_product_category_names(product_ids: Tuple[int, ...]) -> Dict[int, str]:
 def _build_planned_moves(
     diffs: List[StockQuantDiff],
     display_location,
-) -> Tuple[List[Dict[str, Any]], Dict[Tuple[int, int], int]]:
-    """Hitung rencana pergerakan dan pengelompokan. Hanya dipanggil saat load.
-
-    Satu RPC batch untuk semua kandidat lokasi, bukan N RPC per SKU.
-    """
+) -> List[Dict[str, Any]]:
+    """Hitung rencana pergerakan. Hanya dipanggil saat load."""
     planned_moves: List[Dict[str, Any]] = []
-    group_counts: Dict[Tuple[int, int], int] = {}
 
     active_diffs = [d for d in diffs if d.diff_qty != 0]
     if not active_diffs:
-        return planned_moves, group_counts
+        return planned_moves
 
-    # Satu RPC untuk semua produk sekaligus
     product_ids = tuple({d.product_id for d in active_diffs})
     candidates_by_product = _get_candidate_locations_batch(product_ids, display_location.id)
 
@@ -182,7 +176,6 @@ def _build_planned_moves(
 
         candidate = candidates[0]
 
-        # FIX: was "tambah" which never matched — should be "plus"
         if direction == "plus":
             src_location_id = candidate.location_id
             src_location_name = candidate.location_name
@@ -197,7 +190,11 @@ def _build_planned_moves(
             qty_to_move = min(qty_needed, d.display_qty)
 
         remainder = qty_needed - qty_to_move
-        is_blocked = remainder > 0
+
+        # Only block when nothing can actually be moved.
+        # Partial moves ("stok tidak cukup") are allowed — we move whatever is available.
+        is_blocked = qty_to_move <= 0
+        block_reason = "Stok tidak tersedia di lokasi kandidat" if is_blocked else ""
 
         planned_moves.append({
             "quant_id": d.quant_id,
@@ -213,22 +210,32 @@ def _build_planned_moves(
             "src_location_id": src_location_id,
             "dest_location_id": dest_location_id,
             "blocked": is_blocked,
-            "block_reason": "Stok tidak cukup (pemindahan sebagian)" if is_blocked else "",
+            "block_reason": block_reason,
         })
 
-        if not is_blocked:
-            key = (int(src_location_id), int(dest_location_id))
-            group_counts[key] = group_counts.get(key, 0) + 1
+    return planned_moves
 
-    return planned_moves, group_counts
+
+def _calculate_group_counts(planned_moves: List[Dict[str, Any]]) -> Dict[Tuple[int, int], int]:
+    """Hitung pengelompokan dari planned moves yang tidak diblokir."""
+    group_counts: Dict[Tuple[int, int], int] = {}
+    for m in planned_moves:
+        if not m["blocked"] and float(m.get("qty_to_move") or 0) > 0:
+            key = (int(m["src_location_id"]), int(m["dest_location_id"]))
+            group_counts[key] = group_counts.get(key, 0) + 1
+    return group_counts
 
 
 def _group_clean_moves(
     planned_moves: List[Dict[str, Any]],
+    selected_quant_ids: set[int],
 ) -> Dict[Tuple[int, int], List[Dict[str, Any]]]:
+    """Kelompokkan moves yang dipilih dan tidak diblokir."""
     groups: Dict[Tuple[int, int], List[Dict[str, Any]]] = {}
     for m in planned_moves:
         if m["blocked"] or float(m.get("qty_to_move") or 0) <= 0:
+            continue
+        if int(m["quant_id"]) not in selected_quant_ids:
             continue
         key = (int(m["src_location_id"]), int(m["dest_location_id"]))
         groups.setdefault(key, []).append(m)
@@ -243,7 +250,7 @@ def _create_transfers(
     uom_map: Dict[int, Any],
     validate: bool,
 ) -> List[int]:
-    """Buat picking dan move di Odoo. Raise exception jika gagal."""
+    """Buat picking dan move di Odoo."""
     today = date_cls.today().strftime("%Y-%m-%d")
     origin = f"Stock Opname tanggal {today}"
     created: List[int] = []
@@ -418,48 +425,44 @@ def render_internal_moves_page() -> None:
                 ]
 
         with st.spinner("Sedang mengkalkulasi rencana internal..."):
-            planned_moves, group_counts = _build_planned_moves(diffs, display_location)
+            planned_moves = _build_planned_moves(diffs, display_location)
 
         st.session_state.internal_moves_planned = planned_moves
-        st.session_state.internal_moves_group_counts = group_counts
+        # Reset editor state on new load
+        if "internal_moves_preview_editor" in st.session_state:
+            del st.session_state["internal_moves_preview_editor"]
 
-    # --- Preview (dari session state, tidak re-compute) ---
+    # --- Preview ---
     planned_moves: List[Dict[str, Any]] = st.session_state.get("internal_moves_planned", [])
     if not planned_moves:
         return
 
-    group_counts = st.session_state.get("internal_moves_group_counts", {})
-
     st.markdown("#### Preview Internal")
-    selected_by_quant_id: Dict[int, bool] = st.session_state.get("internal_moves_selected", {})
 
-    rows: List[Dict[str, Any]] = []
+    # Build full row list (used for quant_id lookup later)
+    all_rows: List[Dict[str, Any]] = []
     for m in planned_moves:
-        qid = int(m["quant_id"])
-        default_selected = not bool(m.get("blocked"))
-        selected = bool(selected_by_quant_id.get(qid, default_selected))
-        if bool(m.get("blocked")):
-            selected = False
-        rows.append(
-            {
-                "Pilih": selected,
-                "Barcode": m.get("barcode"),
-                "Produk": m.get("product_name"),
-                "Keterangan": m.get("direction"),
-                "Qty Dibutuhkan": m.get("qty_needed"),
-                "Qty Dipindahkan": m.get("qty_to_move"),
-                "Sisa": m.get("remainder"),
-                "Lokasi Asal": m.get("src_location_name"),
-                "Lokasi Tujuan": m.get("dest_location_name"),
-                "Diblokir": m.get("blocked"),
-                "Alasan Blokir": m.get("block_reason"),
-                "__quant_id": qid,
-            }
-        )
+        all_rows.append({
+            "Pilih": not bool(m.get("blocked")),
+            "Barcode": m.get("barcode"),
+            "Produk": m.get("product_name"),
+            "Keterangan": m.get("direction"),
+            "Qty Dibutuhkan": m.get("qty_needed"),
+            "Qty Dipindahkan": m.get("qty_to_move"),
+            "Sisa": m.get("remainder"),
+            "Lokasi Asal": m.get("src_location_name"),
+            "Lokasi Tujuan": m.get("dest_location_name"),
+            "Diblokir": m.get("blocked"),
+            "Alasan Blokir": m.get("block_reason"),
+            "__quant_id": int(m["quant_id"]),
+        })
 
-    df_display = pd.DataFrame(rows)
-    edited = st.data_editor(
-        df_display.drop(columns=["__quant_id"]),
+    # Only show non-blocked moves in the interactive editor
+    visible_rows = [r for r in all_rows if not r["Diblokir"]]
+    df_display = pd.DataFrame(visible_rows)
+
+    edited_df = st.data_editor(
+        df_display.drop(columns=["__quant_id", "Diblokir", "Alasan Blokir"]),
         use_container_width=True,
         hide_index=True,
         disabled=[
@@ -471,8 +474,6 @@ def render_internal_moves_page() -> None:
             "Sisa",
             "Lokasi Asal",
             "Lokasi Tujuan",
-            "Diblokir",
-            "Alasan Blokir",
         ],
         column_config={
             "Pilih": st.column_config.CheckboxColumn(required=True),
@@ -480,11 +481,8 @@ def render_internal_moves_page() -> None:
         key="internal_moves_preview_editor",
     )
 
-    new_selected: Dict[int, bool] = {}
-    for idx, row in edited.iterrows():
-        qid = int(df_display.iloc[idx]["__quant_id"])
-        new_selected[qid] = bool(row.get("Pilih"))
-    st.session_state.internal_moves_selected = new_selected
+    # Calculate group counts based on non-blocked moves
+    group_counts = _calculate_group_counts(planned_moves)
 
     st.markdown("#### Preview Pengelompokan")
     grouping_rows = [
@@ -494,7 +492,7 @@ def render_internal_moves_page() -> None:
     df_group = pd.DataFrame(grouping_rows)
     st.dataframe(df_group, use_container_width=True, hide_index=True)
 
-    # --- Blocked report (products with no internal location) ---
+    # --- Blocked report ---
     blocked_moves = [m for m in planned_moves if m["blocked"]]
     if blocked_moves:
         st.markdown("#### Produk Tanpa Lokasi Internal")
@@ -522,14 +520,16 @@ def render_internal_moves_page() -> None:
     if not _validate_create_inputs(partner_id, selected_user):
         return
 
-    selected_by_quant_id = st.session_state.get("internal_moves_selected", {})
-    selected_moves = [
-        m
-        for m in planned_moves
-        if bool(selected_by_quant_id.get(int(m["quant_id"]), not bool(m.get("blocked"))))
-    ]
+    # Extract selected quant IDs from edited dataframe (aligned to df_display index).
+    # Use bool() instead of `is True` because pandas stores values as numpy.bool_,
+    # which fails a strict identity check against Python's True.
+    selected_quant_ids = {
+        int(df_display.iloc[idx]["__quant_id"])
+        for idx in range(len(edited_df))
+        if bool(edited_df.iloc[idx]["Pilih"])
+    }
 
-    groups = _group_clean_moves(selected_moves)
+    groups = _group_clean_moves(planned_moves, selected_quant_ids)
     if not groups:
         st.error("Tidak ada pergerakan bersih untuk dibuat.")
         return
