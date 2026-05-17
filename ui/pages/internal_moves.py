@@ -280,7 +280,8 @@ def _create_transfers(
         connection_manager.call_method("stock.picking", [picking_id], "action_confirm")
         connection_manager.call_method("stock.picking", [picking_id], "action_assign")
         if validate:
-            connection_manager.call_method("stock.picking", [picking_id], "button_validate")
+            connection_manager.call_method("stock.picking", [picking_id], "button_validate",
+        context={"immediate_transfer": True, "skip_backorder": True},)
 
     return created
 
