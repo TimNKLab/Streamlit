@@ -189,35 +189,7 @@ class PriceUpdateService:
 
     def has_active_promo(self, pricelist_rules: List[Dict[str, Any]]) -> bool:
         """Check if any pricelist rule is an active promo (date range + discount)."""
-        today = date.today()
-
-        if not pricelist_rules:
-            return False
-
-        for rule in pricelist_rules:
-            date_start_str = rule.get("date_start")
-            date_end_str = rule.get("date_end")
-            fixed_price = rule.get("fixed_price")
-
-            if not date_start_str or not fixed_price:
-                continue
-
-            try:
-                ds = datetime.strptime(str(date_start_str)[:10], "%Y-%m-%d").date()
-            except (ValueError, TypeError):
-                continue
-
-            de = None
-            if date_end_str:
-                try:
-                    de = datetime.strptime(str(date_end_str)[:10], "%Y-%m-%d").date()
-                except (ValueError, TypeError):
-                    pass
-
-            if ds <= today and (de is None or de >= today) and fixed_price > 0:
-                return True
-
-        return False
+        return self._get_active_promo_rule(pricelist_rules) is not None
 
     def analyze_bill(self, bill_id: int) -> List[Dict[str, Any]]:
         """Full analysis of a vendor bill: products with margins and promo.
@@ -370,3 +342,138 @@ class PriceUpdateService:
             if fp and ds <= today and (de is None or de >= today) and float(fp) > 0:
                 return rule
         return None
+
+    # ── Write Operations ────────────────────────────────────────────────
+
+    def validate_no_active_promo(
+        self, row: Dict[str, Any], force: bool = False
+    ) -> Tuple[bool, str]:
+        """Check if product has active promo blocking update.
+
+        Returns (is_valid, warning_message).
+        """
+        if force:
+            return True, ""
+        if row.get("has_promo", False):
+            return False, "Produk memiliki promo aktif. Gunakan Force untuk override."
+        return True, ""
+
+    def update_product_price(self, template_id: int, sales_price: float) -> bool:
+        """Update list_price on product.template. Returns True on success."""
+        try:
+            result = self.conn.write(
+                model_name="product.template",
+                ids=[template_id],
+                values={"list_price": sales_price},
+            )
+            return bool(result)
+        except OdooIntegrationError:
+            raise
+        except Exception as exc:
+            raise OdooIntegrationError(f"Failed to update list_price for template {template_id}.") from exc
+
+    def update_pricelist_fixed_price(
+        self, row: Dict[str, Any], fixed_price: float
+    ) -> bool:
+        """Update or create pricelist item fixed_price. Returns True on success."""
+        rules = row.get("pricelist_rules", [])
+        active_rule = self._get_active_promo_rule(rules)
+
+        # If an active promo exists, update its fixed_price
+        if active_rule and active_rule.get("id"):
+            try:
+                return bool(self.conn.write(
+                    model_name="product.pricelist.item",
+                    ids=[int(active_rule["id"])],
+                    values={"fixed_price": fixed_price},
+                ))
+            except OdooIntegrationError:
+                raise
+            except Exception as exc:
+                raise OdooIntegrationError("Failed to update pricelist item.") from exc
+
+        # Try to find any existing pricelist rule for this product
+        existing_rule_id = None
+        for rule in rules:
+            if rule.get("id"):
+                existing_rule_id = int(rule["id"])
+                break
+
+        if existing_rule_id:
+            try:
+                return bool(self.conn.write(
+                    model_name="product.pricelist.item",
+                    ids=[existing_rule_id],
+                    values={"fixed_price": fixed_price},
+                ))
+            except OdooIntegrationError:
+                raise
+            except Exception as exc:
+                raise OdooIntegrationError("Failed to update pricelist item.") from exc
+
+        # No existing rule — create one
+        pricelist_id = None
+        for rule in rules:
+            if rule.get("pricelist_id"):
+                pricelist_id = int(rule["pricelist_id"])
+                break
+
+        if not pricelist_id:
+            return False
+
+        try:
+            new_id = self.conn.create(
+                model_name="product.pricelist.item",
+                values={
+                    "pricelist_id": pricelist_id,
+                    "product_tmpl_id": row["template_id"],
+                    "applied_on": "0_product_variant",
+                    "fixed_price": fixed_price,
+                },
+            )
+            return new_id > 0
+        except OdooIntegrationError:
+            raise
+        except Exception as exc:
+            raise OdooIntegrationError("Failed to create pricelist item.") from exc
+
+    def update_selected(
+        self,
+        rows: List[Dict[str, Any]],
+        selected_indices: List[int],
+        force_map: Dict[int, bool],
+    ) -> Dict[str, Any]:
+        """Update multiple selected products to Odoo.
+
+        Args:
+            rows: Full row data from analyze_bill
+            selected_indices: List of row indices to update
+            force_map: {row_index: force_bool} for promo override
+
+        Returns:
+            {"success": int, "failed": int, "errors": [(barcode, msg), ...]}
+        """
+        result = {"success": 0, "failed": 0, "errors": []}
+
+        for idx in selected_indices:
+            row = rows[idx]
+            force = force_map.get(idx, False)
+
+            # Validate promo
+            valid, msg = self.validate_no_active_promo(row, force)
+            if not valid:
+                result["failed"] += 1
+                result["errors"].append((row["barcode"], msg))
+                continue
+
+            try:
+                sp = float(row.get("sales_price_baru", row["list_price"]))
+                self.update_product_price(row["template_id"], sp)
+                fp = float(row.get("fixed_price_baru", sp))
+                self.update_pricelist_fixed_price(row, fp)
+                result["success"] += 1
+            except OdooIntegrationError as e:
+                result["failed"] += 1
+                result["errors"].append((row["barcode"], str(e)))
+
+        return result
