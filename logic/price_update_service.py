@@ -322,6 +322,8 @@ class PriceUpdateService:
             margins = self.compute_margins(list_price, modal_lama, modal_baru)
             if margins["margin_diff_amount"] <= 500:
                 continue
+            if modal_lama is None:
+                continue  # skip new products with no history
 
             has_promo = self.has_active_promo(pricelist_rules)
             promo_period_str = "-"
