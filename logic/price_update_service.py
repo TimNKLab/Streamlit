@@ -1,0 +1,103 @@
+"""Service for updating sales prices based on vendor bill analysis."""
+
+from __future__ import annotations
+
+from datetime import date, datetime
+from typing import Any, Dict, List, Optional, Tuple
+
+from odoo.connection import OdooIntegrationError, connection_manager
+
+class PriceUpdateService:
+    """Fetch vendor bills, compute margins, and update prices to Odoo."""
+
+    def __init__(self):
+        self.conn = connection_manager
+
+    def get_recent_bills(self) -> List[Dict[str, Any]]:
+        """Return 20 most recent vendor bills (in_invoice)."""
+        try:
+            return self.conn.search_read(
+                model_name="account.move",
+                domain=[("move_type", "=", "in_invoice")],
+                fields=["id", "name", "ref", "invoice_date", "partner_id"],
+                order="invoice_date desc",
+                limit=20,
+            )
+        except OdooIntegrationError:
+            raise
+        except Exception as exc:
+            raise OdooIntegrationError("Failed to fetch recent bills.") from exc
+
+    def get_bill_lines(self, bill_id: int) -> Dict[str, Any]:
+        """Get invoice lines for a bill, split into positive (products) and negative (discounts).
+
+        Returns:
+            {
+                "positive": [{"product_id": [id, name], "price_unit": float, "quantity": float,
+                              "tax_ids": [[id, name]], "price_subtotal": float, "name": str}, ...],
+                "negative": [same fields with price_subtotal < 0, ...],
+            }
+        """
+        try:
+            lines = self.conn.search_read(
+                model_name="account.move.line",
+                domain=[("move_id", "=", bill_id), ("product_id", "!=", False)],
+                fields=["product_id", "price_unit", "quantity", "tax_ids",
+                        "price_subtotal", "name"],
+            )
+        except OdooIntegrationError:
+            raise
+        except Exception as exc:
+            raise OdooIntegrationError("Failed to fetch bill lines.") from exc
+
+        positive = [l for l in lines if l.get("price_subtotal", 0) > 0]
+        negative = [l for l in lines if l.get("price_subtotal", 0) < 0]
+
+        return {"positive": positive, "negative": negative}
+
+    def get_product_template(self, product_id: int) -> Optional[Dict[str, Any]]:
+        """Get product.template with pricelist rules for a product variant."""
+        try:
+            templates = self.conn.search_read(
+                model_name="product.template",
+                domain=[("product_variant_ids", "in", [product_id])],
+                fields=[
+                    "id", "barcode", "name", "list_price", "standard_price",
+                    "x_studio_pricelist_rules_ids/id",
+                    "x_studio_pricelist_rules_ids/pricelist_id/id",
+                    "x_studio_pricelist_rules_ids/pricelist_id/name",
+                    "x_studio_pricelist_rules_ids/applied_on",
+                    "x_studio_pricelist_rules_ids/date_start",
+                    "x_studio_pricelist_rules_ids/date_end",
+                    "x_studio_pricelist_rules_ids/fixed_price",
+                ],
+                limit=1,
+            )
+            return templates[0] if templates else None
+        except OdooIntegrationError:
+            raise
+        except Exception as exc:
+            raise OdooIntegrationError("Failed to fetch product template.") from exc
+
+    def get_previous_bill_line(
+        self, product_id: int, current_bill_id: int
+    ) -> Optional[Dict[str, Any]]:
+        """Get the most recent vendor bill line for a product (excluding current bill)."""
+        try:
+            lines = self.conn.search_read(
+                model_name="account.move.line",
+                domain=[
+                    ("product_id", "=", product_id),
+                    ("move_id.move_type", "=", "in_invoice"),
+                    ("move_id.id", "!=", current_bill_id),
+                    ("price_unit", ">", 0),
+                ],
+                fields=["price_unit", "quantity", "tax_ids", "price_subtotal", "move_id"],
+                order="move_id.invoice_date desc",
+                limit=1,
+            )
+            return lines[0] if lines else None
+        except OdooIntegrationError:
+            raise
+        except Exception as exc:
+            raise OdooIntegrationError("Failed to fetch previous bill line.") from exc
