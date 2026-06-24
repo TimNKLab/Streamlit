@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from datetime import date
 from typing import Any, Dict, List
 
 import streamlit as st
@@ -67,7 +68,7 @@ def _build_price_tag_items(rows: List[Dict[str, Any]], indices: List[int]) -> Li
         items.append({
             "barcode": barcode,
             "name": name,
-            "het": new_price,   # straight price, no strikethrough
+            "het": new_price,
             "diskon": None,
         })
     return items
@@ -95,10 +96,12 @@ def _render_price_tag_download(updated_indices: List[int], rows: List[Dict[str, 
 
     col_a, col_b, col_c = st.columns([1, 1, 1])
     with col_a:
+        label = st.session_state.get("selected_bill_label", "")
+        safe = label.split("|")[0].strip().replace("/", "-")[:20] if label else "update"
         st.download_button(
             "⬇️ Download PDF (A4 48x30mm)",
             data=pdf_bytes,
-            file_name=f"label_kenaikan_harga_{st.session_state.get('selected_bill_label', 'bill')[:15]}.pdf",
+            file_name=f"label_kenaikan_{safe}.pdf",
             mime="application/pdf",
             type="primary",
             use_container_width=True,
@@ -128,19 +131,17 @@ def _render_price_tag_download(updated_indices: List[int], rows: List[Dict[str, 
     with col_c:
         with st.expander("⚙️ Pengaturan Print", expanded=False):
             st.markdown("""
-1. **Paper** → A4
-2. **Scale** → 100% (jangan Fit to Page)
-3. **Margins** → None
+1. **Paper** -> A4
+2. **Scale** -> 100% (jangan Fit to Page)
+3. **Margins** -> None
             """)
-
-    # Thermal option
     with st.expander("🔥 Thermal Label (28x18mm)", expanded=False):
         try:
             thermal_bytes = tag_service.generate_thermal_labels_pdf(tag_items, width_mm=28.0, height_mm=18.0)
             st.download_button(
                 "⬇️ Download Thermal PDF",
                 data=thermal_bytes,
-                file_name=f"thermal_kenaikan_{st.session_state.get('selected_bill_label', 'bill')[:15]}.pdf",
+                file_name=f"thermal_kenaikan_{safe}.pdf",
                 mime="application/pdf",
                 use_container_width=True,
             )
@@ -148,76 +149,14 @@ def _render_price_tag_download(updated_indices: List[int], rows: List[Dict[str, 
             st.warning(f"Thermal PDF gagal: {e}")
 
 
-# ── Main render ───────────────────────────────────────────────────────
+# ── Result display (shared between modes) ──────────────────────────────
 
 
-def render_update_price_page() -> None:
-    """Main render function for Update Harga page."""
-    st.title("📈 Update Harga dari Vendor Bill")
-    service = _get_service()
+def _render_analysis(service: PriceUpdateService, raw_rows: List[Dict[str, Any]], bill_label: str) -> None:
+    """Render analysis table, editor, update, and price tag."""
+    st.session_state.selected_bill_label = bill_label
 
-    # ── Step 1: Load recent bills ───────────────────────────────────────
-    if "recent_bills" not in st.session_state:
-        with st.spinner("Memuat daftar faktur terbaru..."):
-            try:
-                bills = service.get_recent_bills()
-                st.session_state.recent_bills = bills
-            except Exception as e:
-                st.error(f"Gagal memuat faktur: {e}")
-                st.session_state.recent_bills = []
-
-    bills = st.session_state.recent_bills
-    if not bills:
-        st.info("Tidak ada faktur vendor ditemukan.")
-        return
-
-    bill_options: Dict[str, int] = {}
-    for b in bills:
-        bid = int(b["id"])
-        name_raw = b.get("name")
-        ref_raw = b.get("ref")
-        bill_no = str(name_raw).strip() if name_raw and str(name_raw).strip() not in ("", "/", "False") else ""
-        if not bill_no:
-            bill_no = str(ref_raw).strip() if ref_raw and str(ref_raw).strip() not in ("", "False") else ""
-        if not bill_no:
-            bill_no = f"Bill #{bid} (Draft)"
-        partner = b.get("partner_id")
-        partner_name = partner[1] if isinstance(partner, (list, tuple)) and len(partner) >= 2 else ""
-        date_str = str(b.get("invoice_date", ""))[:10] or "-"
-        display = f"{bill_no} | {date_str} | {partner_name}"
-        bill_options[display] = bid
-
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        selected_label = st.selectbox(
-            "Pilih Faktur Vendor",
-            options=list(bill_options.keys()),
-            key="bill_selector",
-        )
-    with col2:
-        st.markdown("###")
-        load_clicked = st.button("🔍 Load", type="primary", use_container_width=True)
-
-    # ── Step 2: Load & analyze bill ─────────────────────────────────────
-    if load_clicked:
-        bill_id = bill_options[selected_label]
-        with st.spinner("Menganalisis faktur..."):
-            try:
-                raw_rows = service.analyze_bill(bill_id)
-                st.session_state.analysis_rows = raw_rows
-                st.session_state.selected_bill_id = bill_id
-                st.session_state.selected_bill_label = selected_label
-                st.session_state.updated_indices = []  # clear previous update
-            except Exception as e:
-                st.error(f"Gagal menganalisis faktur: {e}")
-                st.session_state.analysis_rows = []
-
-    if "analysis_rows" not in st.session_state or not st.session_state.analysis_rows:
-        return
-
-    raw_rows = st.session_state.analysis_rows
-
-    # ── Promo banner ────────────────────────────────────────────────────
+    # Promo banner
     promo_count = sum(1 for r in raw_rows if r["has_promo"])
     if promo_count > 0:
         st.warning(
@@ -225,7 +164,7 @@ def render_update_price_page() -> None:
             "Centang 'Force?' untuk override guardrail."
         )
 
-    # ── Auto-calc defaults ──────────────────────────────────────────────
+    # Auto-calc defaults
     valid_margins = [r["margin_before"] for r in raw_rows if r["margin_before"] is not None]
     avg_margin = sum(valid_margins) / len(valid_margins) if valid_margins else 0.20
 
@@ -274,16 +213,12 @@ def render_update_price_page() -> None:
         f"{promo_count} produk dengan promo aktif."
     )
 
-    # ── Data editor ─────────────────────────────────────────────────────
     editable_cols = ["Sales Price Baru", "Fixed Price Baru", "Pilih", "Force?"]
     edited_df = st.data_editor(
         df,
         column_config={
             "Pilih": st.column_config.CheckboxColumn("Pilih", default=True, width="small"),
-            "Force?": st.column_config.CheckboxColumn(
-                "Force?", default=False, width="small",
-                help="Override guardrail promo aktif",
-            ),
+            "Force?": st.column_config.CheckboxColumn("Force?", default=False, width="small", help="Override guardrail promo aktif"),
             "Sales Price Baru": st.column_config.NumberColumn("Sales Price Baru", format="Rp %d", min_value=0, required=True),
             "Fixed Price Baru": st.column_config.NumberColumn("Fixed Price Baru", format="Rp %d", min_value=0, required=True),
             "Sales Price Lama": st.column_config.TextColumn("Sales Price Lama", disabled=True),
@@ -304,7 +239,7 @@ def render_update_price_page() -> None:
         key="analysis_editor",
     )
 
-    # ── Sync edits ──────────────────────────────────────────────────────
+    # Sync edits
     for idx in range(len(raw_rows)):
         raw_rows[idx]["sales_price_baru"] = float(edited_df.iloc[idx]["Sales Price Baru"])
         raw_rows[idx]["fixed_price_baru"] = float(edited_df.iloc[idx]["Fixed Price Baru"])
@@ -312,7 +247,7 @@ def render_update_price_page() -> None:
         raw_rows[idx]["selected"] = bool(edited_df.iloc[idx]["Pilih"])
     st.session_state.analysis_rows = raw_rows
 
-    # ── Summary metrics ──────────────────────────────────────────────────
+    # Summary metrics
     valid_m = [r for r in raw_rows if r["margin_before"] is not None]
     if valid_m:
         avg_ml = sum(r["margin_before"] for r in valid_m) / len(valid_m)
@@ -321,7 +256,7 @@ def render_update_price_page() -> None:
         c2.metric("Rata-rata Margin Lama", f"{avg_ml * 100:.1f}%")
         c3.metric("Auto Roundup", "Ke 100")
 
-    # ── Update button ────────────────────────────────────────────────────
+    # Update button
     selected_indices = [i for i, r in enumerate(raw_rows) if r.get("selected")]
     if not selected_indices:
         st.info("Pilih produk yang ingin diupdate, lalu klik 'Update ke Odoo'.")
@@ -355,7 +290,144 @@ def render_update_price_page() -> None:
                 st.session_state.pop(key, None)
             st.rerun()
 
-    # ── Price tag download section ───────────────────────────────────────
+    # Price tag download
     updated = st.session_state.get("updated_indices", [])
     if updated:
         _render_price_tag_download(updated, raw_rows)
+
+
+# ── Main render ───────────────────────────────────────────────────────
+
+
+def render_update_price_page() -> None:
+    """Main render function for Update Harga page."""
+    st.title("📈 Update Harga dari Vendor Bill")
+    service = _get_service()
+
+    # ── Mode toggle ────────────────────────────────────────────────────
+    mode = st.radio("Mode", ["Pilih Vendor Bill", "Pilih Tanggal"], horizontal=True, label_visibility="collapsed")
+
+    # ── Step 1: Select source ──────────────────────────────────────────
+    load_clicked = False
+    bill_id = None
+    bill_label = ""
+    date_mode = False
+
+    if mode == "Pilih Vendor Bill":
+        if "recent_bills" not in st.session_state:
+            with st.spinner("Memuat daftar faktur terbaru..."):
+                try:
+                    st.session_state.recent_bills = service.get_recent_bills()
+                except Exception as e:
+                    st.error(f"Gagal memuat faktur: {e}")
+                    st.session_state.recent_bills = []
+
+        bills = st.session_state.recent_bills
+        if not bills:
+            st.info("Tidak ada faktur vendor ditemukan.")
+            return
+
+        bill_options: Dict[str, int] = {}
+        for b in bills:
+            bid = int(b["id"])
+            name_raw = b.get("name")
+            ref_raw = b.get("ref")
+            bill_no = str(name_raw).strip() if name_raw and str(name_raw).strip() not in ("", "/", "False") else ""
+            if not bill_no:
+                bill_no = str(ref_raw).strip() if ref_raw and str(ref_raw).strip() not in ("", "False") else ""
+            if not bill_no:
+                bill_no = f"Bill #{bid} (Draft)"
+            partner = b.get("partner_id")
+            partner_name = partner[1] if isinstance(partner, (list, tuple)) and len(partner) >= 2 else ""
+            date_str = str(b.get("invoice_date", ""))[:10] or "-"
+            bill_options[f"{bill_no} | {date_str} | {partner_name}"] = bid
+
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            sel_label = st.selectbox("Pilih Faktur Vendor", options=list(bill_options.keys()), key="bill_selector")
+        with col2:
+            st.markdown("###")
+            load_clicked = st.button("🔍 Load", type="primary", use_container_width=True)
+
+        if load_clicked:
+            bill_id = bill_options[sel_label]
+            bill_label = sel_label
+
+    else:  # Pilih Tanggal
+        date_mode = True
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            target_date = st.date_input("Pilih Tanggal", value=date.today(), key="date_picker")
+        with col2:
+            st.markdown("###")
+            load_clicked = st.button("🔍 Load Bills", type="primary", use_container_width=True)
+
+    # ── Step 2: Load & analyze ─────────────────────────────────────────
+    if load_clicked:
+        st.session_state.updated_indices = []
+        if not date_mode:
+            # Single bill
+            with st.spinner("Menganalisis faktur..."):
+                try:
+                    raw_rows = service.analyze_bill(bill_id)
+                    st.session_state.analysis_rows = raw_rows
+                    st.session_state.selected_bill_id = bill_id
+                    st.session_state.selected_bill_label = bill_label
+                except Exception as e:
+                    st.error(f"Gagal menganalisis faktur: {e}")
+                    st.session_state.analysis_rows = []
+        else:
+            # Batch by date
+            with st.spinner(f"Mengambil faktur untuk {target_date.isoformat()}..."):
+                try:
+                    bills = service.get_bills_by_date(target_date)
+                except Exception as e:
+                    st.error(f"Gagal mengambil faktur: {e}")
+                    st.session_state.analysis_rows = []
+                    return
+
+            if not bills:
+                st.info(f"Tidak ada faktur vendor untuk {target_date.isoformat()}.")
+                st.session_state.analysis_rows = []
+                return
+
+            bill_status = st.empty()
+            all_rows: List[Dict[str, Any]] = []
+            errors = []
+
+            for i, b in enumerate(bills):
+                bid = int(b["id"])
+                bname = str(b.get("name") or f"Bill #{bid}")
+                bill_status.info(f"Memproses {i+1}/{len(bills)}: {bname}")
+                try:
+                    rows = service.analyze_bill(bid)
+                    all_rows.extend(rows)
+                except Exception as e:
+                    errors.append((bname, str(e)))
+
+            bill_status.empty()
+
+            # Dedup by barcode — keep first (largest bill ID is first in order)
+            seen: set = set()
+            deduped = []
+            for r in all_rows:
+                if r["barcode"] not in seen:
+                    seen.add(r["barcode"])
+                    deduped.append(r)
+
+            st.session_state.analysis_rows = deduped
+            bill_label = f"{target_date.isoformat()} — {len(deduped)} produk dari {len(bills)} bill"
+            st.session_state.selected_bill_label = bill_label
+
+            # Show bill status
+            if errors:
+                with st.expander(f"⚠️ {len(errors)} bill gagal diproses", expanded=False):
+                    for bname, err in errors:
+                        st.caption(f"{bname}: {err}")
+            st.caption(f"✅ {len(bills)} bill ditemukan. {len(deduped)} produk unik dari {len(all_rows)} total baris.")
+
+    # ── Step 3: Render analysis if data exists ─────────────────────────
+    if "analysis_rows" not in st.session_state or not st.session_state.analysis_rows:
+        return
+
+    _render_analysis(service, st.session_state.analysis_rows, st.session_state.get("selected_bill_label", ""))

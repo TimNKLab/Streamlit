@@ -50,6 +50,24 @@ class PriceUpdateService:
         except Exception as exc:
             raise OdooIntegrationError("Failed to fetch recent bills.") from exc
 
+    def get_bills_by_date(self, target_date: date) -> List[Dict[str, Any]]:
+        """Return all posted vendor bills for a given date."""
+        try:
+            return self.conn.search_read(
+                model_name="account.move",
+                domain=[
+                    ("move_type", "=", "in_invoice"),
+                    ("state", "=", "posted"),
+                    ("invoice_date", "=", target_date.isoformat()),
+                ],
+                fields=["id", "name", "ref", "invoice_date", "partner_id"],
+                order="id desc",
+            )
+        except OdooIntegrationError:
+            raise
+        except Exception as exc:
+            raise OdooIntegrationError("Failed to fetch bills by date.") from exc
+
     def get_bill_lines(self, bill_id: int) -> Dict[str, Any]:
         """Get invoice lines for a bill, split into positive (products) and negative (discounts).
 
