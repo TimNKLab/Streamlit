@@ -5,6 +5,7 @@ from .pages.dashboard import render_dashboard_page
 from .pages.ba_sales_report import render_ba_sales_report_page, BASalesReportPage
 from .pages.stock_control import render_stock_control_page, StockControlPage
 from .pages.dsi_report import render_dsi_report_page
+from .pages.update_price import render_update_price_page
 
 __all__ = [
     'AuthComponents',
@@ -12,6 +13,7 @@ __all__ = [
     'render_ba_sales_report_page',
     'render_stock_control_page',
     'render_dsi_report_page',
+    'render_update_price_page',
     'BASalesReportPage',
     'StockControlPage'
 ]
