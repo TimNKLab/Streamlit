@@ -17,7 +17,7 @@ SESSION_DIR.mkdir(exist_ok=True)
 # Storage keys
 PRICE_TAG_FILE = SESSION_DIR / "price_tag_session.json"
 ACTIVE_TAB_FILE = SESSION_DIR / "active_tab.txt"
-TAB_NAMES = ["dashboard", "ba_sales", "stock_control", "dsi_report", "stock_card", "price_tag"]
+TAB_NAMES = ["dashboard", "ba_sales", "stock_control", "dsi_report", "stock_card", "price_tag", "update_harga"]
 
 def _get_session_id() -> str:
     """Get a unique session identifier."""
