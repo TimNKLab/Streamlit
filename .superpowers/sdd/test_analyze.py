@@ -1,11 +1,6 @@
-"""Quick test of analyze_bill."""
+"""Quick test of analyze_bill. Uses Odoo env vars from .env or secrets.toml"""
 import os
-os.environ["ODOO_PROTOCOL"] = "jsonrpc+ssl"
-os.environ["ODOO_HOST"] = "REDACTED.dev.odoo.com"
-os.environ["ODOO_PORT"] = "443"
-os.environ["ODOO_DATABASE"] = "REDACTED"
-os.environ["ODOO_USERNAME"] = "robi@nk.com"
-os.environ["ODOO_API_KEY"] = "REDACTED"
+# Credentials loaded from environment — see .env or .streamlit/secrets.toml
 
 from logic.price_update_service import PriceUpdateService
 s = PriceUpdateService()

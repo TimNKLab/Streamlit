@@ -1,28 +1,11 @@
+import os
 import xmlrpc.client
 
-"""url = "https://REDACTED.dev.odoo.com"
-db = "REDACTED"
-username = "robi@nk.com"
-password = "REDACTED"
 
-common = xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/common")
-uid = common.authenticate(db, username, password, {})
-
-models = xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/object")
-
-partners = models.execute_kw(
-    db, uid, password,
-    'res.partner', 'search_read',
-    [[]],
-    {'limit': 5}
-)
-
-print(partners)"""
-
-url = "http://newkhatulistiwa.odoo.com"
-db = "REDACTED"
-username = "robi@nk.com"
-password = "REDACTED"
+url = os.environ.get("ODOO_HOST", "http://newkhatulistiwa.odoo.com")
+db = os.environ.get("ODOO_DATABASE", "")
+username = os.environ.get("ODOO_USERNAME", "robi@nk.com")
+password = os.environ.get("ODOO_API_KEY", "")
 
 common = xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/common")
 uid = common.authenticate(db, username, password, {})

@@ -118,12 +118,9 @@ Pilih bill → get_bill_lines → split positive/negative
 ## Env Config
 
 ```
-ODOO_HOST=REDACTED.dev.odoo.com
+# Credentials not stored in repo — set via .env or .streamlit/secrets.toml
 ODOO_PROTOCOL=jsonrpc+ssl
 ODOO_PORT=443
-ODOO_DATABASE=REDACTED
-ODOO_USERNAME=robi@nk.com
-ODOO_API_KEY=REDACTED
 ```
 
 ## Next Steps
