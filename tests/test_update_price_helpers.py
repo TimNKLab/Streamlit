@@ -5,9 +5,9 @@ from ui.pages.update_price import _fmt_datetime
 
 
 def test_fmt_datetime_with_valid_timestamp():
-    """Test formatting valid ISO timestamp to Indonesian format."""
+    """Test formatting valid ISO timestamp to WIB (UTC+7)."""
     result = _fmt_datetime("2026-06-25 14:30:00")
-    assert result == "25/06/2026 14:30"
+    assert result == "25/06/2026 21:30"
 
 
 def test_fmt_datetime_with_none():

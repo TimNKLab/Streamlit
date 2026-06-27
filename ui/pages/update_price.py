@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from datetime import date, datetime
 from typing import Any, Dict, List
+from zoneinfo import ZoneInfo
 
 import streamlit as st
 import pandas as pd
@@ -32,12 +33,15 @@ def _fmt_pct(v: float | None) -> str:
 
 
 def _fmt_datetime(v: str | None) -> str:
-    """Format ISO timestamp to DD/MM/YYYY HH:MM. Returns '-' for None/invalid."""
+    """Format ISO timestamp to DD/MM/YYYY HH:MM WIB (UTC+7). Returns '-' for None/invalid."""
     if not v or not isinstance(v, str):
         return "-"
     try:
         dt = datetime.fromisoformat(str(v).replace(" ", "T"))
-        return dt.strftime("%d/%m/%Y %H:%M")
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+        dt_wib = dt.astimezone(ZoneInfo("Asia/Jakarta"))
+        return dt_wib.strftime("%d/%m/%Y %H:%M")
     except (ValueError, AttributeError):
         return "-"
 

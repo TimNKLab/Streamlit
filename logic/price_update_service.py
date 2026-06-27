@@ -15,7 +15,9 @@ class PriceUpdateService:
     def __init__(self):
         self.conn = connection_manager
         self._tax_map: Dict[int, float] = {}
+        self._price_field_id: int | None = None
         self._init_tax_map()
+        self._init_price_field_id()
 
     def _init_tax_map(self) -> None:
         """Query all account.tax records and build id->multiplier map."""
@@ -34,6 +36,24 @@ class PriceUpdateService:
                     mult = m
                     break
             self._tax_map[int(t["id"])] = mult
+
+    def _init_price_field_id(self) -> None:
+        """Cache ir.model.fields id for product.template.list_price.
+
+        Used by analyze_bill to query mail.tracking.value for price-specific
+        timestamps (more accurate than write_date which tracks ANY field change).
+        Falls back to None if field not found — write_date used instead.
+        """
+        try:
+            fields = self.conn.search_read(
+                "ir.model.fields",
+                domain=[("model", "=", "product.template"), ("name", "=", "list_price")],
+                fields=["id"],
+                limit=1,
+            )
+            self._price_field_id = fields[0]["id"] if fields else None
+        except Exception:
+            self._price_field_id = None
 
     def get_recent_bills(self) -> List[Dict[str, Any]]:
         """Return 20 most recent vendor bills (in_invoice)."""
@@ -253,7 +273,42 @@ class PriceUpdateService:
             except Exception as exc:
                 raise OdooIntegrationError("Failed to fetch pricelist items.") from exc
 
-        # ── 5. Batch: previous bill lines for all variants ────────────────
+        # ── 5. Batch: price change timestamps via mail.tracking.value ────
+        # More accurate than write_date (which tracks ANY field modification).
+        price_updates: Dict[int, str] = {}
+        if self._price_field_id and template_ids:
+            try:
+                msgs = self.conn.search_read(
+                    "mail.message",
+                    domain=[("model", "=", "product.template"),
+                            ("res_id", "in", template_ids)],
+                    fields=["id", "res_id", "date"],
+                    order="date desc",
+                )
+                msg_ids = [m["id"] for m in msgs]
+                msg_res = {m["id"]: m["res_id"] for m in msgs}
+                if msg_ids:
+                    trackings = self.conn.search_read(
+                        "mail.tracking.value",
+                        domain=[("mail_message_id", "in", msg_ids),
+                                ("field_id", "=", self._price_field_id)],
+                        fields=["create_date", "mail_message_id"],
+                        order="create_date desc",
+                    )
+                    seen = set()
+                    for tv in trackings:
+                        mid = tv["mail_message_id"]
+                        if isinstance(mid, (list, tuple)):
+                            mid = mid[0]
+                        res = msg_res.get(mid)
+                        if res and res not in seen:
+                            seen.add(res)
+                            price_updates[res] = tv["create_date"]
+            except Exception:
+                # Tracking data optional — fallback to write_date
+                pass
+
+        # ── 6. Batch: previous bill lines for all variants ────────────────
         prev_map: Dict[int, Optional[Dict[str, Any]]] = {}
         try:
             prev_lines = self.conn.search_read(
@@ -353,7 +408,7 @@ class PriceUpdateService:
                 "pricelist_rules": pricelist_rules,
                 "sales_price_baru": list_price,
                 "fixed_price_baru": promo_price or list_price,
-                "price_last_updated": tmpl.get("write_date"),
+                "price_last_updated": price_updates.get(tid, tmpl.get("write_date")),
             })
 
         return rows
