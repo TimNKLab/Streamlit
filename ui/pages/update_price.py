@@ -102,7 +102,7 @@ def _render_tag_session_ui():
             st.error(f"Gagal generate PDF: {e}")
             return
 
-    col_pdf, col_print, col_clear = st.columns([1, 1, 1])
+    col_pdf, col_print = st.columns([1, 1])
     with col_pdf:
         st.download_button(
             "⬇️ Download PDF (A4 48x30mm)",
@@ -135,11 +135,6 @@ def _render_tag_session_ui():
                 </script>""",
                 height=0,
             )
-    with col_clear:
-        if st.button("🗑️ Hapus Sesi", type="secondary", use_container_width=True):
-            _clear_tag_session()
-            st.rerun()
-
     with st.expander("🔥 Thermal Label (28x18mm)", expanded=False):
         try:
             thermal_bytes = tag_service.generate_thermal_labels_pdf(
