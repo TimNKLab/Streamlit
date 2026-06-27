@@ -243,7 +243,7 @@ def _render_analysis(service: PriceUpdateService, raw_rows: List[Dict[str, Any]]
             "Modal Lama": st.column_config.TextColumn("Modal Lama", disabled=True),
             "Modal Baru": st.column_config.TextColumn("Modal Baru", disabled=True),
             "Harga→Fix": st.column_config.TextColumn("Harga→Fix", disabled=True, width="small"),
-            "Terakhir Diupdate": st.column_config.TextColumn("Terakhir Diupdate", disabled=True, width="medium"),
+            "Terakhir Diupdate": st.column_config.TextColumn("Terakhir Diupdate", disabled=True, width="medium", help="Perubahan harga jual (list_price) terakhir. Jika tidak ada data tracking, ditampilkan write_date (modifikasi field apapun)."),
             "Promo": st.column_config.TextColumn("Promo", disabled=True, width="small"),
             "Periode Promo": st.column_config.TextColumn("Periode Promo", disabled=True),
             "Barcode": st.column_config.TextColumn("Barcode", disabled=True),
