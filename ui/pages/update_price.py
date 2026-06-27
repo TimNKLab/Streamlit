@@ -111,6 +111,7 @@ def _render_tag_session_ui():
             mime="application/pdf",
             type="primary",
             use_container_width=True,
+            on_click=_clear_tag_session,
         )
     with col_print:
         if st.button("🖨️ Print di Browser", use_container_width=True):
@@ -150,6 +151,7 @@ def _render_tag_session_ui():
                 file_name="thermal_kenaikan_sesi.pdf",
                 mime="application/pdf",
                 use_container_width=True,
+                on_click=_clear_tag_session,
             )
         except Exception as e:
             st.warning(f"Thermal PDF gagal: {e}")
