@@ -212,6 +212,7 @@ def _render_analysis(service: PriceUpdateService, raw_rows: List[Dict[str, Any]]
             "Harga→Fix": _fmt_pct(sf_ratio) if sf_ratio is not None else "-",
             "Sales Price Baru": sp_baru,
             "Fixed Price Baru": fp_baru,
+            "Terakhir Diupdate": _fmt_datetime(r.get("price_last_updated")),
             "Promo": "✅ Aktif" if r["has_promo"] else "❌ Tidak",
             "Periode Promo": r["promo_period_str"],
         })
@@ -238,6 +239,7 @@ def _render_analysis(service: PriceUpdateService, raw_rows: List[Dict[str, Any]]
             "Modal Lama": st.column_config.TextColumn("Modal Lama", disabled=True),
             "Modal Baru": st.column_config.TextColumn("Modal Baru", disabled=True),
             "Harga→Fix": st.column_config.TextColumn("Harga→Fix", disabled=True, width="small"),
+            "Terakhir Diupdate": st.column_config.TextColumn("Terakhir Diupdate", disabled=True, width="medium"),
             "Promo": st.column_config.TextColumn("Promo", disabled=True, width="small"),
             "Periode Promo": st.column_config.TextColumn("Periode Promo", disabled=True),
             "Barcode": st.column_config.TextColumn("Barcode", disabled=True),
