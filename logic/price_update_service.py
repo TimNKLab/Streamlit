@@ -224,7 +224,7 @@ class PriceUpdateService:
                 tmpl_data = self.conn.search_read(
                     "product.template",
                     domain=[("id", "in", template_ids)],
-                    fields=["id", "name", "list_price"],
+                    fields=["id", "name", "list_price", "write_date"],
                 )
                 for t in tmpl_data:
                     tmpl_map[t["id"]] = t
@@ -353,6 +353,7 @@ class PriceUpdateService:
                 "pricelist_rules": pricelist_rules,
                 "sales_price_baru": list_price,
                 "fixed_price_baru": promo_price or list_price,
+                "price_last_updated": tmpl.get("write_date"),
             })
 
         return rows
