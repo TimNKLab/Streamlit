@@ -1,6 +1,6 @@
-Task 1: complete (commits 64ae877, review clean)
-Task 2: complete (commits 8586175, review clean)
-Task 3: complete (commits 7a6ec6f, review clean)
-Task 4: complete (commits 20d39ef, review pending)
-Task 5: complete (commits c505713, review pending)
-
+Task 1: complete (commits aada26b..ca94787, review approved, 2 minor test improvements noted)
+Task 2: complete (commits ca94787..feebd24, review clean)
+Task 3: complete (commits feebd24..f2bd94f, review clean)
+Task 4: complete (verified batch-by-date flow, handled edge cases)
+Task 5: complete (committed docs/features/price-last-updated-timestamp.md)
+Task 6: complete (updated MEMORY.md with price-last-updated-timestamp entry)

@@ -251,6 +251,41 @@ class PriceUpdateService:
             except Exception as exc:
                 raise OdooIntegrationError("Failed to fetch product templates.") from exc
 
+        # ── 4. Batch: active loyalty programs for promo detection ────────
+        # More reliable than scanning pricelist items for date rules.
+        today = date.today()
+        promo_map: Dict[int, Dict[str, Any]] = {}
+        try:
+            active_progs = self.conn.search_read(
+                "loyalty.program",
+                domain=[
+                    ("active", "=", True),
+                    ("trigger_product_ids", "in", variant_ids),
+                ],
+                fields=["id", "name", "date_from", "date_to", "trigger_product_ids"],
+            )
+            for prog in active_progs:
+                df = prog.get("date_from")
+                dt = prog.get("date_to")
+                try:
+                    start_ok = datetime.strptime(str(df)[:10], "%Y-%m-%d").date() <= today if df else True
+                    end_ok = datetime.strptime(str(dt)[:10], "%Y-%m-%d").date() >= today if dt else True
+                except (ValueError, TypeError):
+                    continue
+                if not (start_ok and end_ok):
+                    continue
+                affected = prog.get("trigger_product_ids") or []
+                for v in affected:
+                    if v in variant_ids and v not in promo_map:
+                        promo_map[v] = {
+                            "name": prog.get("name"),
+                            "date_from": df,
+                            "date_to": dt,
+                        }
+        except Exception:
+            # Loyalty optional — promo detection falls through silently
+            pass
+
         # ── 4. Batch: pricelist items for all templates ───────────────────
         pl_map: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
         if template_ids:
@@ -380,16 +415,14 @@ class PriceUpdateService:
             if modal_lama is None:
                 continue  # skip new products with no history
 
-            has_promo = self.has_active_promo(pricelist_rules)
+            has_promo = vid in promo_map
             promo_period_str = "-"
             promo_price = None
-            if has_promo and pricelist_rules:
-                active = self._get_active_promo_rule(pricelist_rules)
-                if active:
-                    ds = str(active.get("date_start", ""))[:10]
-                    de = str(active.get("date_end", ""))[:10] if active.get("date_end") else ""
-                    promo_period_str = f"{ds} s.d {de}" if de else f"mulai {ds}"
-                    promo_price = active.get("fixed_price")
+            promo = promo_map.get(vid)
+            if promo:
+                ds = str(promo.get("date_from", ""))[:10] if promo.get("date_from") else ""
+                de = str(promo.get("date_to", ""))[:10] if promo.get("date_to") else ""
+                promo_period_str = f"{ds} s.d {de}" if ds and de else (f"mulai {ds}" if ds else "-")
 
             rows.append({
                 "product_id": vid,

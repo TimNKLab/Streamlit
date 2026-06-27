@@ -1,41 +1,21 @@
-# Task 2 Report: Add Discount, Tax, Margin, Promo Logic
+## Report: Task 2 - Timestamp Formatting Helper
 
-## What Was Implemented
+### Implemented
+- Added `_fmt_datetime(v: str | None) -> str` to `ui/pages/update_price.py`
+  - Formats ISO 8601 "YYYY-MM-DD HH:MM:SS" -> "DD/MM/YYYY HH:MM"
+  - Returns "-" for None, empty string, or invalid format
+- Added `datetime` import to the file imports
+- Created `tests/test_update_price_helpers.py` with 4 test cases
 
-Added 8 methods + 1 class constant to `PriceUpdateService` in `logic/price_update_service.py`:
+### TDD Evidence
+- RED: `ImportError: cannot import name '_fmt_datetime' from 'ui.pages.update_price'` (expected - function not yet defined)
+- GREEN: `4 passed in 7.30s` (all 4 test cases passing)
 
-- `TAX_MULTIPLIERS` — class dict mapping tax names to multipliers (11% PPN Blm Termasuk -> 1.11)
-- `compute_discount_prorata()` — prorates negative line discounts across positive lines, returns 0-1 pct (capped at 100%)
-- `get_tax_multiplier()` — looks up Odoo tax_ids [[id, name], ...] against TAX_MULTIPLIERS
-- `compute_modal_baru()` — price after discount * tax multiplier, rounded
-- `compute_margins()` — margin_before, margin_after, margin_diff_amount
-- `has_active_promo()` — checks date range + fixed_price > 0 on pricelist rules
-- `analyze_bill()` — orchestrator: fetches lines, computes discounts/tax/margins, filters by |diff| > 500, detects promos
-- `_extract_pricelist_rules()` — parses flat Odoo search_read arrays into structured rule dicts
-- `_get_active_promo_rule()` — returns first active promo rule matching today's date
+### Files Changed
+- Modify: `ui/pages/update_price.py` (added import + function, +19 lines)
+- Create: `tests/test_update_price_helpers.py` (+33 lines)
 
-## Test Results
-
-```
-compute_discount_prorata: True
-get_tax_multiplier: True
-compute_modal_baru: True
-compute_margins: True
-has_active_promo: True
-analyze_bill: True
-_extract_pricelist_rules: True
-_get_active_promo_rule: True
-TAX_MULTIPLIERS: True
-```
-
-All methods import and resolve correctly. No runtime test (requires Odoo connection).
-
-## Files Changed
-
-- `logic/price_update_service.py` — +269 insertions
-
-## Concerns
-
-- `analyze_bill()` calls `get_bill_lines()`, `get_product_template()`, `get_previous_bill_line()` which hit Odoo API — may be slow for bills with many lines.
-- `_extract_pricelist_rules()` relies on Odoo returning flat parallel arrays — schema mismatch would silently produce partial rows.
-- Discount prorata uses same pct for both current and previous bill computation; assumes discount structure is consistent across bills.
+### Self-Review
+- All 4 edge cases covered: valid timestamp, None, empty string, invalid format
+- Uses `.get()` pattern consistent with codebase
+- No over-engineering (YAGNI)
