@@ -198,81 +198,6 @@ def _build_price_tag_items(rows: List[Dict[str, Any]], indices: List[int]) -> Li
     return items
 
 
-def _render_price_tag_download(updated_indices: List[int], rows: List[Dict[str, Any]]):
-    """Show price tag download section after successful update."""
-    st.markdown("---")
-    st.subheader("🏷️ Price Tag Kenaikan Harga")
-
-    tag_items = _build_price_tag_items(rows, updated_indices)
-    if not tag_items:
-        st.info("Tidak ada item valid untuk price tag.")
-        return
-
-    st.caption(f"{len(tag_items)} label harga baru siap cetak")
-
-    with st.spinner("🔄 Membuat PDF..."):
-        tag_service = PriceTagService()
-        try:
-            pdf_bytes = tag_service.generate_pdf(tag_items, size_preset="standard")
-        except Exception as e:
-            st.error(f"Gagal generate PDF: {e}")
-            return
-
-    col_a, col_b, col_c = st.columns([1, 1, 1])
-    with col_a:
-        label = st.session_state.get("selected_bill_label", "")
-        safe = label.split("|")[0].strip().replace("/", "-")[:20] if label else "update"
-        st.download_button(
-            "⬇️ Download PDF (A4 48x30mm)",
-            data=pdf_bytes,
-            file_name=f"label_kenaikan_{safe}.pdf",
-            mime="application/pdf",
-            type="primary",
-            use_container_width=True,
-        )
-    with col_b:
-        if st.button("🖨️ Print di Browser", use_container_width=True):
-            import base64
-            import streamlit.components.v1 as components
-            pdf_b64 = base64.b64encode(pdf_bytes).decode("ascii")
-            components.html(
-                f"""<script>
-                  (function(){{
-                    try {{
-                      const bytes = Uint8Array.from(atob("{pdf_b64}"), c=>c.charCodeAt(0));
-                      const url = URL.createObjectURL(new Blob([bytes],{{type:'application/pdf'}}));
-                      const w = window.open(url,'_blank');
-                      if(!w){{ alert('Popup blocked.'); return; }}
-                      const t = setInterval(()=>{{
-                        try{{ if(w.document.readyState==='complete'){{ clearInterval(t); w.focus(); w.print(); }} }}
-                        catch(e){{}}
-                      }},250);
-                    }}catch(e){{ alert('Failed: '+(e.message||e)); }}
-                  }})();
-                </script>""",
-                height=0,
-            )
-    with col_c:
-        with st.expander("⚙️ Pengaturan Print", expanded=False):
-            st.markdown("""
-1. **Paper** -> A4
-2. **Scale** -> 100% (jangan Fit to Page)
-3. **Margins** -> None
-            """)
-    with st.expander("🔥 Thermal Label (28x18mm)", expanded=False):
-        try:
-            thermal_bytes = tag_service.generate_thermal_labels_pdf(tag_items, width_mm=28.0, height_mm=18.0)
-            st.download_button(
-                "⬇️ Download Thermal PDF",
-                data=thermal_bytes,
-                file_name=f"thermal_kenaikan_{safe}.pdf",
-                mime="application/pdf",
-                use_container_width=True,
-            )
-        except Exception as e:
-            st.warning(f"Thermal PDF gagal: {e}")
-
-
 # ── Result display (shared between modes) ──────────────────────────────
 
 
@@ -417,10 +342,6 @@ def _render_analysis(service: PriceUpdateService, raw_rows: List[Dict[str, Any]]
                 st.session_state.pop(key, None)
             st.rerun()
 
-    # Price tag download
-    updated = st.session_state.get("updated_indices", [])
-    if updated:
-        _render_price_tag_download(updated, raw_rows)
 
 
 # ── Main render ───────────────────────────────────────────────────────
