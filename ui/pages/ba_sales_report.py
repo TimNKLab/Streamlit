@@ -43,7 +43,7 @@ class BASalesReportPage:
         uploaded_file = st.file_uploader(
             "Choose an Excel file",
             type=['xlsx', 'xls'],
-            help="Upload Excel file with sales data. Required columns: Order Date, Product/Barcode, Product, Parent Brand, Brand, Quantity, Tax Incl."
+            help="Upload Excel file with sales data. Required columns: Order Date, Product/Barcode, Product, Brand/Parent Brand, Brand, Quantity, Tax Incl."
         )
         
         if uploaded_file is not None:
@@ -171,7 +171,7 @@ class BASalesReportPage:
 - Order Date (datetime)
 - Product/Barcode (text)
 - Product (text)
-- Parent Brand (text, can be empty)
+- Brand/Parent Brand (text, format: Brand/Parent Brand)
 - Brand (text)
 - Quantity (numeric)
 - Tax Incl. (numeric)
@@ -183,7 +183,7 @@ class BASalesReportPage:
             1. **Upload**: Upload your Excel file with sales data
             2. **Process**: Click "Process File" to sort and group the data
             3. **Sorting**: Data is sorted by Parent Brand (alphabetically), then by Order Date (earliest first)
-            4. **Grouping**: Data is split into separate workbooks by Parent Brand (uses Brand if Parent Brand is empty)
+            4. **Grouping**: Data is split into separate workbooks by Parent Brand extracted from Brand/Parent Brand column (uses Brand if Brand/Parent Brand is empty)
             5. **Reports**: Each workbook contains:
                - **Pivoted Sheet**: Pivot table with barcode as rows, dates as columns (grouped by day)
                - **Detailed Report Sheet**: All transactions for that Parent Brand

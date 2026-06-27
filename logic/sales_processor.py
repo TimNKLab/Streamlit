@@ -17,6 +17,22 @@ class SalesProcessor:
     def __init__(self):
         pass
     
+    def extract_parent_brand(self, row):
+        """Extract Parent Brand from 'Brand/Parent Brand' column with fallback to Brand"""
+        brand_parent = row.get('Brand/Parent Brand', '')
+        brand = row.get('Brand', '')
+        
+        if pd.notna(brand_parent) and '/' in str(brand_parent):
+            # Extract Parent Brand (after separator '/')
+            parent_brand = str(brand_parent).split('/')[-1].strip()
+            return parent_brand if parent_brand else brand
+        elif pd.notna(brand_parent):
+            # No separator, use the whole value as Parent Brand
+            return str(brand_parent).strip() if str(brand_parent).strip() else brand
+        else:
+            # Fallback to Brand
+            return brand
+    
     def sort_sales_data(self, df):
         """Sort data by Parent Brand (alphabetically) then Order Date (earliest date, then earliest hour)"""
         df = df.copy()
@@ -24,7 +40,7 @@ class SalesProcessor:
         if not pd.api.types.is_datetime64_any_dtype(df['Order Date']):
             df['Order Date'] = pd.to_datetime(df['Order Date'], errors='coerce')
         
-        df['sort_key_parent_brand'] = df['Parent Brand'].fillna(df['Brand'])
+        df['sort_key_parent_brand'] = df.apply(self.extract_parent_brand, axis=1)
         df['sort_date'] = df['Order Date'].dt.date
         df['sort_hour'] = df['Order Date'].dt.hour
         
@@ -45,7 +61,7 @@ class SalesProcessor:
         split_by_brand_parents = ['Paragon', 'Hebe']
         
         for idx, row in df.iterrows():
-            parent_brand = row['Parent Brand'] if pd.notna(row['Parent Brand']) else row['Brand']
+            parent_brand = self.extract_parent_brand(row)
             brand = row['Brand'] if pd.notna(row['Brand']) else 'Unknown'
             
             if parent_brand in split_by_brand_parents:
@@ -65,7 +81,7 @@ class SalesProcessor:
     
     def validate_sales_data(self, df):
         """Validate that the sales data has required columns"""
-        required_columns = ['Order Date', 'Product/Barcode', 'Product', 'Parent Brand', 'Brand', 'Quantity', 'Tax Incl.']
+        required_columns = ['Order Date', 'Product/Barcode', 'Product', 'Brand/Parent Brand', 'Brand', 'Quantity', 'Tax Incl.']
         missing_columns = [col for col in required_columns if col not in df.columns]
         
         if missing_columns:
