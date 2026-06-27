@@ -46,6 +46,39 @@ def _fmt_datetime(v: str | None) -> str:
         return "-"
 
 
+# ── Price tag session management ──────────────────────────────────────
+
+def _init_tag_session() -> None:
+    """Initialize session state for accumulated price tags."""
+    if "price_tag_items" not in st.session_state:
+        st.session_state.price_tag_items = []
+
+
+def _accumulate_tag_items(new_items: List[Dict[str, Any]]) -> None:
+    """Append or update items in the price tag session.
+
+    If barcode already exists in session, update its het (newer price wins).
+    Otherwise append.
+    """
+    existing = {item["barcode"]: i for i, item in enumerate(st.session_state.price_tag_items)}
+    for item in new_items:
+        bc = item["barcode"]
+        if bc in existing:
+            st.session_state.price_tag_items[existing[bc]]["het"] = item["het"]
+        else:
+            st.session_state.price_tag_items.append(item)
+
+
+def _clear_tag_session() -> None:
+    """Clear accumulated price tag items."""
+    st.session_state.price_tag_items = []
+
+
+def _tag_session_count() -> int:
+    """Return number of pending price tag items."""
+    return len(st.session_state.price_tag_items)
+
+
 def _roundup(v: float) -> int:
     """Round up to nearest 100. 19250 -> 19300."""
     return math.ceil(v / 100.0) * 100
@@ -298,12 +331,13 @@ def _render_analysis(service: PriceUpdateService, raw_rows: List[Dict[str, Any]]
                     else:
                         st.success(f"✅ {result['success']} produk berhasil diupdate ke Odoo!")
                     if result["success"] > 0:
-                        st.session_state.updated_indices = selected_indices
+                        new_items = _build_price_tag_items(raw_rows, selected_indices)
+                        _accumulate_tag_items(new_items)
                 except Exception as e:
                     st.error(f"Gagal mengupdate: {e}")
     with col2:
         if st.button("🔄 Reset", use_container_width=True):
-            for key in ["analysis_rows", "selected_bill_id", "selected_bill_label", "updated_indices"]:
+            for key in ["analysis_rows", "selected_bill_id", "selected_bill_label"]:
                 st.session_state.pop(key, None)
             st.rerun()
 
@@ -318,6 +352,7 @@ def _render_analysis(service: PriceUpdateService, raw_rows: List[Dict[str, Any]]
 
 def render_update_price_page() -> None:
     """Main render function for Update Harga page."""
+    _init_tag_session()
     st.title("📈 Update Harga dari Vendor Bill")
     service = _get_service()
 
@@ -381,7 +416,6 @@ def render_update_price_page() -> None:
 
     # ── Step 2: Load & analyze ─────────────────────────────────────────
     if load_clicked:
-        st.session_state.updated_indices = []
         if not date_mode:
             # Single bill
             with st.spinner("Menganalisis faktur..."):
