@@ -1,0 +1,4 @@
+- [Update Harga Feature Complete](update-harga-feature-complete.md) — Vendor bill analysis, batch by date, price tag, auto-calc
+- [Odoo Query Patterns](odoo-query-patterns.md) — Tax int IDs, direct pricelist query, no dot-notation on one2many
+- [Credentials Configuration Fix](credentials-config-fix.md) — .env must be dotenv format with ODOO_* prefix, secrets.toml needs [odoo] section
+- [Price Last Updated Timestamp](price-last-updated-timestamp.md) — Update Harga shows when products were last modified in Odoo
