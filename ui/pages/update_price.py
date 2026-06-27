@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Dict, List
 
 import streamlit as st
@@ -29,6 +29,17 @@ def _fmt_pct(v: float | None) -> str:
     if v is None:
         return "-"
     return f"{v * 100:.1f}%"
+
+
+def _fmt_datetime(v: str | None) -> str:
+    """Format ISO timestamp to DD/MM/YYYY HH:MM. Returns '-' for None/invalid."""
+    if not v or not isinstance(v, str):
+        return "-"
+    try:
+        dt = datetime.fromisoformat(str(v).replace(" ", "T"))
+        return dt.strftime("%d/%m/%Y %H:%M")
+    except (ValueError, AttributeError):
+        return "-"
 
 
 def _roundup(v: float) -> int:
