@@ -441,7 +441,7 @@ class PriceUpdateService:
                 "pricelist_rules": pricelist_rules,
                 "sales_price_baru": list_price,
                 "fixed_price_baru": promo_price or list_price,
-                "price_last_updated": price_updates.get(tid, tmpl.get("write_date")),
+                "price_last_updated": price_updates.get(tid),
             })
 
         return rows

@@ -88,13 +88,13 @@ def test_analyze_bill_uses_price_tracking(service_with_mock):
     assert result[0]["price_last_updated"] == "2026-06-25 14:30:00"
 
 
-def test_analyze_bill_falls_back_to_write_date(service_with_mock):
-    """Test fallback to write_date when no tracking data."""
+def test_analyze_bill_returns_none_when_no_tracking_data(service_with_mock):
+    """Test price_last_updated is None when no tracking data (no write_date fallback)."""
     service, mock = service_with_mock
     mock.side_effect = _analyze_seqs(with_tracking=False)
     result = service.analyze_bill(bill_id=100)
     assert len(result) > 0
-    assert result[0]["price_last_updated"] == "2026-06-26 03:00:00"
+    assert result[0]["price_last_updated"] is None
 
 
 def test_loyalty_promo_detected(service_with_mock):
