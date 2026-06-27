@@ -50,8 +50,8 @@ def _fmt_datetime(v: str | None) -> str:
 
 def _init_tag_session() -> None:
     """Initialize session state for accumulated price tags."""
-    if "price_tag_items" not in st.session_state:
-        st.session_state.price_tag_items = []
+    if "update_harga_tag_items" not in st.session_state:
+        st.session_state.update_harga_tag_items = []
 
 
 def _accumulate_tag_items(new_items: List[Dict[str, Any]]) -> None:
@@ -60,29 +60,29 @@ def _accumulate_tag_items(new_items: List[Dict[str, Any]]) -> None:
     If barcode already exists in session, update its het (newer price wins).
     Otherwise append.
     """
-    existing = {item["barcode"]: i for i, item in enumerate(st.session_state.price_tag_items)}
+    existing = {item["barcode"]: i for i, item in enumerate(st.session_state.update_harga_tag_items)}
     for item in new_items:
         bc = item["barcode"]
         if bc in existing:
-            st.session_state.price_tag_items[existing[bc]]["het"] = item["het"]
+            st.session_state.update_harga_tag_items[existing[bc]]["het"] = item["het"]
         else:
-            st.session_state.price_tag_items.append(item)
+            st.session_state.update_harga_tag_items.append(item)
 
 
 def _clear_tag_session() -> None:
     """Clear accumulated price tag items."""
-    st.session_state.price_tag_items = []
+    st.session_state.update_harga_tag_items = []
 
 
 def _tag_session_count() -> int:
     """Return number of pending price tag items."""
-    return len(st.session_state.price_tag_items)
+    return len(st.session_state.update_harga_tag_items)
 
 
 def _render_tag_session_ui():
     """Show persistent session UI for accumulated price tags.
 
-    Visible whenever price_tag_items is non-empty.
+    Visible whenever update_harga_tag_items is non-empty.
     Shows count, Cetak Semua button, and Clear button.
     """
     count = _tag_session_count()
@@ -96,7 +96,7 @@ def _render_tag_session_ui():
         tag_service = PriceTagService()
         try:
             pdf_bytes = tag_service.generate_pdf(
-                st.session_state.price_tag_items, size_preset="standard"
+                st.session_state.update_harga_tag_items, size_preset="standard"
             )
         except Exception as e:
             st.error(f"Gagal generate PDF: {e}")
@@ -138,7 +138,7 @@ def _render_tag_session_ui():
     with st.expander("🔥 Thermal Label (28x18mm)", expanded=False):
         try:
             thermal_bytes = tag_service.generate_thermal_labels_pdf(
-                st.session_state.price_tag_items, width_mm=28.0, height_mm=18.0
+                st.session_state.update_harga_tag_items, width_mm=28.0, height_mm=18.0
             )
             st.download_button(
                 "⬇️ Download Thermal PDF",
@@ -176,7 +176,7 @@ def _get_old_fixed_price(r: Dict[str, Any]) -> float | None:
 # ── Price tag helpers ─────────────────────────────────────────────────
 
 
-def _build_price_tag_items(rows: List[Dict[str, Any]], indices: List[int]) -> List[Dict[str, Any]]:
+def _build_update_harga_tag_items(rows: List[Dict[str, Any]], indices: List[int]) -> List[Dict[str, Any]]:
     """Build tag items for new price labels — no strikethrough, just new price."""
     items = []
     for idx in indices:
@@ -329,7 +329,7 @@ def _render_analysis(service: PriceUpdateService, raw_rows: List[Dict[str, Any]]
                     else:
                         st.success(f"✅ {result['success']} produk berhasil diupdate ke Odoo!")
                     if result["success"] > 0:
-                        new_items = _build_price_tag_items(raw_rows, selected_indices)
+                        new_items = _build_update_harga_tag_items(raw_rows, selected_indices)
                         _accumulate_tag_items(new_items)
                 except Exception as e:
                     st.error(f"Gagal mengupdate: {e}")

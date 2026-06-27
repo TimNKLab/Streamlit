@@ -11,39 +11,39 @@ from ui.pages.update_price import (
 
 
 def test_session_init():
-    """Test session state initializes price_tag_items as empty list."""
-    if "price_tag_items" in st.session_state:
-        del st.session_state.price_tag_items
+    """Test session state initializes update_harga_tag_items as empty list."""
+    if "update_harga_tag_items" in st.session_state:
+        del st.session_state.update_harga_tag_items
     _init_tag_session()
-    assert "price_tag_items" in st.session_state
-    assert st.session_state.price_tag_items == []
+    assert "update_harga_tag_items" in st.session_state
+    assert st.session_state.update_harga_tag_items == []
 
 
 def test_accumulate_appends():
     """Test that accumulate adds new items."""
-    st.session_state.price_tag_items = []
+    st.session_state.update_harga_tag_items = []
     _accumulate_tag_items([
         {"barcode": "123", "name": "A", "het": 5000, "diskon": None},
         {"barcode": "456", "name": "B", "het": 10000, "diskon": None},
     ])
-    assert len(st.session_state.price_tag_items) == 2
+    assert len(st.session_state.update_harga_tag_items) == 2
 
 
 def test_accumulate_updates_existing():
     """Test same barcode updates het, no duplicate."""
-    st.session_state.price_tag_items = [
+    st.session_state.update_harga_tag_items = [
         {"barcode": "123", "name": "A", "het": 5000, "diskon": None},
     ]
     _accumulate_tag_items([
         {"barcode": "123", "name": "A", "het": 6000, "diskon": None},
     ])
-    assert len(st.session_state.price_tag_items) == 1
-    assert st.session_state.price_tag_items[0]["het"] == 6000
+    assert len(st.session_state.update_harga_tag_items) == 1
+    assert st.session_state.update_harga_tag_items[0]["het"] == 6000
 
 
 def test_tag_session_count():
     """Test count returns correct number."""
-    st.session_state.price_tag_items = [
+    st.session_state.update_harga_tag_items = [
         {"barcode": "123", "name": "A", "het": 5000, "diskon": None},
         {"barcode": "456", "name": "B", "het": 10000, "diskon": None},
     ]
@@ -52,8 +52,8 @@ def test_tag_session_count():
 
 def test_clear_tag_session():
     """Test clear empties the list."""
-    st.session_state.price_tag_items = [
+    st.session_state.update_harga_tag_items = [
         {"barcode": "123", "name": "A", "het": 5000, "diskon": None}
     ]
     _clear_tag_session()
-    assert st.session_state.price_tag_items == []
+    assert st.session_state.update_harga_tag_items == []
