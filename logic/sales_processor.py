@@ -41,8 +41,8 @@ class SalesProcessor:
             df['Order Date'] = pd.to_datetime(df['Order Date'], errors='coerce')
         
         df['sort_key_parent_brand'] = df.apply(self.extract_parent_brand, axis=1)
-        df['sort_date'] = df['Order Date'].dt.date
-        df['sort_hour'] = df['Order Date'].dt.hour
+        df['sort_date'] = df['Order Date'].dt.date.fillna(pd.Timestamp.max.date())
+        df['sort_hour'] = df['Order Date'].dt.hour.fillna(23)
         
         df_sorted = df.sort_values(
             by=['sort_key_parent_brand', 'sort_date', 'sort_hour', 'Order Date'],
