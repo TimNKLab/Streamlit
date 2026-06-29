@@ -4,10 +4,35 @@ import pandas as pd
 import io
 import zipfile
 import re
+import numpy as np
 from openpyxl import Workbook, load_workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from datetime import datetime
+
+
+def _to_native(val):
+    """Convert numpy scalars to Python native types for openpyxl compat."""
+    if isinstance(val, (np.integer,)):
+        return int(val)
+    if isinstance(val, (np.floating,)):
+        return float(val)
+    if isinstance(val, (np.bool_,)):
+        return bool(val)
+    return val
+
+
+def _df_to_native(df):
+    """Deep-convert DataFrame values to Python native types for openpyxl compat.
+    ponytail: copies whole DF — fine for report-sized data, not for 1M+ rows.
+    """
+    df = df.copy()
+    for col in df.columns:
+        if pd.api.types.is_integer_dtype(df[col]):
+            df[col] = df[col].astype(int)
+        elif pd.api.types.is_float_dtype(df[col]):
+            df[col] = df[col].astype(float)
+    return df
 
 def sanitize_filename(name):
     """Sanitize filename by removing invalid characters"""
@@ -109,6 +134,7 @@ def create_detailed_report(df_group):
     return df
 
 def create_grouped_detailed_report(df_group, organize_by_brand=False):
+    df_group = _df_to_native(df_group) if not df_group.empty else df_group
     """Create detailed report grouped by brand with bold headers, sorted by date/time"""
     df = df_group.copy()
     
@@ -147,8 +173,8 @@ def create_grouped_detailed_report(df_group, organize_by_brand=False):
             brand_data = df[df['Brand'] == brand].copy()
             
             # Calculate totals for the brand
-            total_quantity = brand_data['Quantity'].sum() if 'Quantity' in brand_data.columns else 0
-            total_value = brand_data['Tax Incl.'].sum() if 'Tax Incl.' in brand_data.columns else 0
+            total_quantity = _to_native(brand_data['Quantity'].sum()) if 'Quantity' in brand_data.columns else 0
+            total_value = _to_native(brand_data['Tax Incl.'].sum()) if 'Tax Incl.' in brand_data.columns else 0
             
             # Format total value as Indonesian Rupiah
             if total_value == 0:
@@ -214,15 +240,16 @@ def apply_excel_formatting(worksheet, data_type="pivot"):
                 cell = worksheet.cell(row=row_idx, column=col_idx)
                 if cell.value is not None:
                     try:
-                        if isinstance(cell.value, str):
-                            cell.value = float(cell.value)
-                        
+                        val = _to_native(cell.value)
+                        if isinstance(val, str):
+                            val = float(val)
+
                         # Format as Indonesian Rupiah text
-                        if cell.value == 0:
+                        if val == 0:
                             formatted_value = "Rp 0.00"
                         else:
-                            formatted_value = f"Rp {cell.value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-                        
+                            formatted_value = f"Rp {val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
                         cell.value = formatted_value
                         cell.number_format = '@'  # Text format
                     except:
@@ -307,9 +334,17 @@ def apply_excel_formatting(worksheet, data_type="pivot"):
 
 def create_workbook_for_parent_brand(pivot_df, detailed_df, parent_brand_name, date_str=None, is_brand_organized=False, df_group=None, organize_by_brand=False, separate_by_date=False):
     """Create Excel workbook with 2 sheets: Pivoted and Detailed Report"""
+    # Convert all DFs to native Python types before openpyxl touches them
+    if pivot_df is not None and not pivot_df.empty:
+        pivot_df = _df_to_native(pivot_df)
+    if detailed_df is not None and not detailed_df.empty:
+        detailed_df = _df_to_native(detailed_df)
+    if df_group is not None and not df_group.empty:
+        df_group = _df_to_native(df_group)
+
     wb = Workbook()
     wb.remove(wb.active)
-    
+
     if separate_by_date and df_group is not None:
         df_group['Order Date Day'] = pd.to_datetime(df_group['Order Date']).dt.normalize()
         unique_dates = sorted(df_group['Order Date Day'].unique())
@@ -345,17 +380,17 @@ def create_workbook_for_parent_brand(pivot_df, detailed_df, parent_brand_name, d
                             brand_pivot = date_pivot_df[date_pivot_df['Barcode'].astype(str).isin(brand_barcodes)]
                             
                             total_cols = [col for col in date_pivot_df.columns if col.startswith('Total_')]
-                            brand_total_sellout = brand_pivot[total_cols].sum().sum() if not brand_pivot.empty and total_cols else 0
+                            brand_total_sellout = _to_native(brand_pivot[total_cols].sum().sum()) if not brand_pivot.empty and total_cols else 0
                             
                             qty_cols = [col for col in date_pivot_df.columns if col.startswith('Jumlah_')]
-                            brand_total_qty = brand_pivot[qty_cols].sum().sum() if not brand_pivot.empty and qty_cols else 0
+                            brand_total_qty = _to_native(brand_pivot[qty_cols].sum().sum()) if not brand_pivot.empty and qty_cols else 0
                             
                             brand_total_row_data = {}
                             for col in date_pivot_df.columns:
                                 if col in ['Barcode', 'Produk']:
                                     brand_total_row_data[col] = f"{brand} Total Sellout" if col == 'Barcode' else ""
                                 elif col.startswith('Total_'):
-                                    brand_total_row_data[col] = brand_total_sellout
+                                    brand_total_row_data[col] = _to_native(brand_total_sellout)
                                 elif col.startswith('Jumlah_'):
                                     brand_total_row_data[col] = brand_total_qty
                                 else:
@@ -372,7 +407,7 @@ def create_workbook_for_parent_brand(pivot_df, detailed_df, parent_brand_name, d
                                     ws_pivot.append(row_data)
                                     current_row += 1
                 else:
-                    for r in dataframe_to_rows(date_pivot_df, index=False, header=True):
+                    for r in _safe_dataframe_to_rows(date_pivot_df, index=False, header=True):
                         ws_pivot.append(r)
                     
                     total_row_data = {}
@@ -380,9 +415,9 @@ def create_workbook_for_parent_brand(pivot_df, detailed_df, parent_brand_name, d
                         if col in ['Barcode', 'Produk']:
                             total_row_data[col] = "Total Sellout" if col == 'Barcode' else ""
                         elif col.startswith('Total_'):
-                            total_row_data[col] = date_pivot_df[col].sum()
+                            total_row_data[col] = _to_native(date_pivot_df[col].sum())
                         elif col.startswith('Jumlah_'):
-                            total_row_data[col] = date_pivot_df[col].sum()
+                            total_row_data[col] = _to_native(date_pivot_df[col].sum())
                         else:
                             total_row_data[col] = ""
                     
@@ -393,14 +428,14 @@ def create_workbook_for_parent_brand(pivot_df, detailed_df, parent_brand_name, d
                     for col_idx, col_name in enumerate(date_pivot_df.columns, 1):
                         cell = ws_pivot.cell(row=2, column=col_idx)
                         value = total_row_df.iloc[0][col_name]
-                        cell.value = value
+                        cell.value = _to_native(value)
                 
                 # Apply formatting to pivot sheet
                 apply_excel_formatting(ws_pivot, "pivot")
                 
                 ws_detailed = wb.create_sheet(f"Detailed Report_{date_str_sheet}")
                 date_detailed_df = create_grouped_detailed_report(date_df, organize_by_brand=True)
-                for r in dataframe_to_rows(date_detailed_df, index=False, header=True):
+                for r in _safe_dataframe_to_rows(date_detailed_df, index=False, header=True):
                     ws_detailed.append(r)
                 
                 # Apply formatting to detailed report sheet
@@ -438,17 +473,17 @@ def create_workbook_for_parent_brand(pivot_df, detailed_df, parent_brand_name, d
                     brand_pivot = pivot_df[pivot_df['Barcode'].astype(str).isin(brand_barcodes)]
                     
                     total_cols = [col for col in pivot_df.columns if col.startswith('Total_')]
-                    brand_total_sellout = brand_pivot[total_cols].sum().sum() if not brand_pivot.empty and total_cols else 0
+                    brand_total_sellout = _to_native(brand_pivot[total_cols].sum().sum()) if not brand_pivot.empty and total_cols else 0
                     
                     qty_cols = [col for col in pivot_df.columns if col.startswith('Jumlah_')]
-                    brand_total_qty = brand_pivot[qty_cols].sum().sum() if not brand_pivot.empty and qty_cols else 0
+                    brand_total_qty = _to_native(brand_pivot[qty_cols].sum().sum()) if not brand_pivot.empty and qty_cols else 0
                     
                     brand_total_row_data = {}
                     for col in pivot_df.columns:
                         if col in ['Barcode', 'Produk']:
                             brand_total_row_data[col] = f"{brand} Total Sellout" if col == 'Barcode' else ""
                         elif col.startswith('Total_'):
-                            brand_total_row_data[col] = brand_total_sellout
+                            brand_total_row_data[col] = _to_native(brand_total_sellout)
                         elif col.startswith('Jumlah_'):
                             brand_total_row_data[col] = brand_total_qty
                         else:
@@ -465,7 +500,7 @@ def create_workbook_for_parent_brand(pivot_df, detailed_df, parent_brand_name, d
                             ws_pivot.append(row_data)
                             current_row += 1
         else:
-            for r in dataframe_to_rows(pivot_df, index=False, header=True):
+            for r in _safe_dataframe_to_rows(pivot_df, index=False, header=True):
                 ws_pivot.append(r)
         
         if not organize_by_brand and not is_brand_organized:
@@ -482,17 +517,17 @@ def create_workbook_for_parent_brand(pivot_df, detailed_df, parent_brand_name, d
                         brand_pivot = pivot_df[pivot_df['Barcode'].astype(str).isin(brand_barcodes)]
                         
                         total_cols = [col for col in pivot_df.columns if col.startswith('Total_')]
-                        brand_total_sellout = brand_pivot[total_cols].sum().sum() if not brand_pivot.empty and total_cols else 0
+                        brand_total_sellout = _to_native(brand_pivot[total_cols].sum().sum()) if not brand_pivot.empty and total_cols else 0
                         
                         qty_cols = [col for col in pivot_df.columns if col.startswith('Jumlah_')]
-                        brand_total_qty = brand_pivot[qty_cols].sum().sum() if not brand_pivot.empty and qty_cols else 0
+                        brand_total_qty = _to_native(brand_pivot[qty_cols].sum().sum()) if not brand_pivot.empty and qty_cols else 0
                         
                         brand_total_row_data = {}
                         for col in pivot_df.columns:
                             if col in ['Barcode', 'Produk']:
                                 brand_total_row_data[col] = f"{brand} Total Sellout" if col == 'Barcode' else ""
                             elif col.startswith('Total_'):
-                                brand_total_row_data[col] = brand_total_sellout
+                                brand_total_row_data[col] = _to_native(brand_total_sellout)
                             elif col.startswith('Jumlah_'):
                                 brand_total_row_data[col] = brand_total_qty
                             else:
@@ -502,7 +537,7 @@ def create_workbook_for_parent_brand(pivot_df, detailed_df, parent_brand_name, d
                         for col_idx, col_name in enumerate(pivot_df.columns, 1):
                             cell = ws_pivot.cell(row=current_row, column=col_idx)
                             value = brand_total_row_data.get(col_name, "")
-                            cell.value = value
+                            cell.value = _to_native(value)
                         
                         current_row += 1
             
@@ -514,11 +549,11 @@ def create_workbook_for_parent_brand(pivot_df, detailed_df, parent_brand_name, d
             
             total_cols = [col for col in pivot_df.columns if col.startswith('Total_')]
             for col in total_cols:
-                total_row_data[col] = pivot_df[col].sum()
-            
+                total_row_data[col] = _to_native(pivot_df[col].sum())
+
             qty_cols = [col for col in pivot_df.columns if col.startswith('Jumlah_')]
             for col in qty_cols:
-                total_row_data[col] = pivot_df[col].sum()
+                total_row_data[col] = _to_native(pivot_df[col].sum())
             
             total_row_df = pd.DataFrame([total_row_data])
             total_row_df = total_row_df.reindex(columns=pivot_df.columns, fill_value="")
@@ -528,14 +563,14 @@ def create_workbook_for_parent_brand(pivot_df, detailed_df, parent_brand_name, d
             for col_idx, col_name in enumerate(pivot_df.columns, 1):
                 cell = ws_pivot.cell(row=current_row, column=col_idx)
                 value = total_row_df.iloc[0][col_name]
-                cell.value = value
+                cell.value = _to_native(value)
         
         # Apply formatting to pivot sheet
         apply_excel_formatting(ws_pivot, "pivot")
         
         ws_detailed = wb.create_sheet("Detailed Report")
         detailed_df = create_grouped_detailed_report(df_group, organize_by_brand=organize_by_brand)
-        for r in dataframe_to_rows(detailed_df, index=False, header=True):
+        for r in _safe_dataframe_to_rows(detailed_df, index=False, header=True):
             ws_detailed.append(r)
         
         # Apply formatting to detailed report sheet
@@ -547,7 +582,10 @@ def create_workbook_for_parent_brand(pivot_df, detailed_df, parent_brand_name, d
         
         return output
 
-def create_zip_file(workbooks_dict):
+def _safe_dataframe_to_rows(df, *args, **kwargs):
+    """dataframe_to_rows wrapper that converts numpy types first."""
+    df = _df_to_native(df)
+    return dataframe_to_rows(df, *args, **kwargs)
     """Create zip file containing all workbooks"""
     zip_buffer = io.BytesIO()
     
