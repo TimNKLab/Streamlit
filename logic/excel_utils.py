@@ -586,6 +586,9 @@ def _safe_dataframe_to_rows(df, *args, **kwargs):
     """dataframe_to_rows wrapper that converts numpy types first."""
     df = _df_to_native(df)
     return dataframe_to_rows(df, *args, **kwargs)
+
+
+def create_zip_file(workbooks_dict):
     """Create zip file containing all workbooks"""
     zip_buffer = io.BytesIO()
     
