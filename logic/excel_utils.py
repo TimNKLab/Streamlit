@@ -12,13 +12,20 @@ from datetime import datetime
 
 
 def _to_native(val):
-    """Convert numpy scalars to Python native types for openpyxl compat."""
+    """Convert numpy/pandas scalars to Python native types for openpyxl compat."""
     if isinstance(val, (np.integer,)):
         return int(val)
     if isinstance(val, (np.floating,)):
         return float(val)
     if isinstance(val, (np.bool_,)):
         return bool(val)
+    if isinstance(val, (np.datetime64,)):
+        return pd.Timestamp(val).to_pydatetime()
+    if isinstance(val, (np.str_,)):
+        return str(val)
+    # pandas NA/NaT singletons — openpyxl Cython checknull chokes on these
+    if val is pd.NA or val is pd.NaT:
+        return None
     return val
 
 
@@ -585,7 +592,8 @@ def create_workbook_for_parent_brand(pivot_df, detailed_df, parent_brand_name, d
 def _safe_dataframe_to_rows(df, *args, **kwargs):
     """dataframe_to_rows wrapper that converts numpy types first."""
     df = _df_to_native(df)
-    return dataframe_to_rows(df, *args, **kwargs)
+    for row in dataframe_to_rows(df, *args, **kwargs):
+        yield [_to_native(v) for v in row]
 
 
 def create_zip_file(workbooks_dict):
