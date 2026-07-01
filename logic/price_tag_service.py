@@ -10,6 +10,8 @@ from typing import Optional, Dict, Any, List, Tuple
 import pandas as pd
 import streamlit as st
 
+from odoo.connection import connection_manager
+
 # Get project root (works locally and on Streamlit Cloud)
 PROJECT_ROOT = Path(__file__).parent.parent
 
@@ -134,6 +136,84 @@ class PriceTagService:
 
         if use_memory_cache:
             self._load_parquet_to_memory()
+
+    # ------------------------------------------------------------------
+    # Odoo sync
+    # ------------------------------------------------------------------
+
+    def sync_from_odoo(self) -> Dict[str, int]:
+        """Sync in-stock products from Odoo to local parquet file.
+
+        Queries ``product.product`` where ``qty_available > 0``,
+        joins ``product.pricelist.item.fixed_price`` as ``diskon``,
+        writes to parquet, and reloads the in-memory cache.
+
+        Returns:
+            Dict with ``success`` (valid records written) and
+            ``skipped`` (records missing barcode/name).
+        """
+        # 1. Fetch in-stock products
+        products = connection_manager.search_read(
+            "product.product",
+            domain=[("qty_available", ">", 0)],
+            fields=["barcode", "name", "list_price", "id", "product_tmpl_id"],
+        )
+
+        # 2. Fetch pricelist items (batch)
+        tmpl_ids = list({
+            p["product_tmpl_id"][0]
+            for p in products
+            if isinstance(p.get("product_tmpl_id"), (list, tuple)) and len(p["product_tmpl_id"]) > 0
+        })
+        pricelist_items: List[Dict[str, Any]] = []
+        if tmpl_ids:
+            pricelist_items = connection_manager.search_read(
+                "product.pricelist.item",
+                domain=[("product_tmpl_id", "in", tmpl_ids)],
+                fields=["product_tmpl_id", "fixed_price"],
+            )
+
+        # Build fixed_price lookup: {tmpl_id: fixed_price}
+        fp_map: Dict[int, float] = {}
+        for pi in pricelist_items:
+            ptid = pi.get("product_tmpl_id")
+            fp = float(pi.get("fixed_price") or 0)
+            if isinstance(ptid, (list, tuple)) and ptid and fp > 0:
+                fp_map[int(ptid[0])] = fp
+
+        # 3. Build records
+        records: List[Dict[str, Any]] = []
+        skipped = 0
+        for p in products:
+            barcode = str(p.get("barcode") or "").strip()
+            name = str(p.get("name") or "").strip()
+            if not barcode or not name:
+                skipped += 1
+                continue
+
+            tmpl_id = None
+            ptid = p.get("product_tmpl_id")
+            if isinstance(ptid, (list, tuple)) and ptid:
+                tmpl_id = int(ptid[0])
+
+            diskon = fp_map.get(tmpl_id) if tmpl_id is not None else None
+
+            records.append({
+                "barcode": barcode,
+                "name": name,
+                "het": float(p.get("list_price") or 0),
+                "diskon": diskon,
+            })
+
+        # 4. Write parquet (ensure schema even when empty)
+        df = pd.DataFrame(records, columns=["barcode", "name", "het", "diskon"])
+        os.makedirs(os.path.dirname(self.parquet_path), exist_ok=True)
+        df.to_parquet(self.parquet_path, index=False, compression="zstd")
+
+        # 5. Reload cache
+        self._load_parquet_to_memory()
+
+        return {"success": len(records), "skipped": skipped}
 
     # ------------------------------------------------------------------
     # Font loading
