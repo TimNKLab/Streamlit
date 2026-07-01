@@ -21,12 +21,11 @@ _KEY_TS_FORMAT = '%H%M%S%f'
 
 @st.cache_resource(
     ttl=3600,
-    hash_funcs={PriceTagService: lambda x: "v3"}
+    hash_funcs={PriceTagService: lambda x: "v4"}  # bump for new impl
 )
 def get_price_tag_service() -> PriceTagService:
     """Get or create cached PriceTagService - expensive resource cached globally."""
-    service = PriceTagService()
-    service.load_database()
+    service = PriceTagService(auto_convert=False, use_memory_cache=False)
     return service
 
 
@@ -101,6 +100,7 @@ class PriceTagPage:
             'thermal_rotate': True,
             'price_tag_size_preset': 'standard',  # 'standard' or 'mini'
             'price_tag_pdf_size_preset': None,
+            'price_tag_session_active': False,
         }
         for key, val in defaults.items():
             if key not in ss:
@@ -158,6 +158,51 @@ class PriceTagPage:
             'in_system': False,
             'key_prefix': f"row_{idx}_{_now_key()}",
         }
+
+    # ------------------------------------------------------------------
+    # Session gate
+    # ------------------------------------------------------------------
+
+    def _render_session_start(self):
+        """Render the session-start gate: big button + explanation."""
+        st.markdown("---")
+        st.markdown("### 🚀 Mulai Sesi Price Tag")
+        st.caption(
+            "Ambil data harga terbaru dari Odoo (hanya produk dengan stok > 0). "
+            "Setelah sinkronisasi, Anda bisa mencari produk dan cetak label harga."
+        )
+
+        if st.button("Mulai Sesi", type="primary", use_container_width=True):
+            with st.spinner("Mengambil data harga dari Odoo..."):
+                try:
+                    result = self.service.sync_from_odoo()
+                    st.toast(
+                        f"✅ {result['success']} produk berhasil di-sinkronisasi!",
+                        icon="✅",
+                    )
+                    if result["skipped"] > 0:
+                        st.toast(
+                            f"⚠️ {result['skipped']} produk dilewati (barcode/nama kosong)",
+                            icon="⚠️",
+                        )
+                    st.session_state.price_tag_session_active = True
+                    self._valid_items_cache = None
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Gagal sinkronisasi: {e}")
+
+    def _render_end_session(self):
+        """Render session-end UI at the bottom of the page."""
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            if st.button("🏁 Akhiri Sesi", use_container_width=True, type="secondary"):
+                st.session_state.price_tag_session_active = False
+                st.session_state.price_tag_pdf_ready = False
+                st.session_state.price_tag_pdf_bytes = None
+                st.session_state.price_tag_items_hash = None
+                st.session_state.price_tag_pdf_size_preset = None
+                self._valid_items_cache = None
+                st.rerun()
 
     # ------------------------------------------------------------------
     # Barcode lookup
@@ -965,23 +1010,12 @@ Saat dialog print Edge terbuka, atur:
     def render(self):
         st.title("Price Tag Generator 😸")
 
-        col1, col2 = st.columns([4, 1])
-        with col1:
-            st.caption(f"📦 Database: {self.service.product_count:,} harga sudah terupdate")
-        with col2:
-            if st.button("🔄 Update harga", type="secondary",
-                         help="Force reload price data from file"):
-                try:
-                    self.service._auto_convert_if_needed()
-                except Exception:
-                    pass
-                self.service._last_load_mtime = None
-                self.service._load_parquet_to_memory()
-                st.session_state.price_tag_pdf_ready = False
-                st.session_state.price_tag_pdf_bytes = None
-                st.session_state.price_tag_items_hash = None
-                st.session_state.price_tag_pdf_size_preset = None
-                st.success("Harga sudah terupdate!")
+        # ── Session gate ──────────────────────────────────────────────
+        if not st.session_state.get("price_tag_session_active", False):
+            self._render_session_start()
+            return  # Block everything until session starts
+
+        st.caption(f"📦 Database: {self.service.product_count:,} harga tersedia")
 
         tab_a4, tab_thermal = st.tabs(["A4 Price Tag", "Thermal 18x28mm"])
         with tab_a4:
@@ -992,6 +1026,7 @@ Saat dialog print Edge terbuka, atur:
             self.render_thermal_section()
 
         self._process_pending_focus()
+        self._render_end_session()
 
 
 def render_price_tag_page():
