@@ -1,8 +1,9 @@
 """Odoo Price Sync Service - Pulls prices from Odoo and detects changes"""
 
 import json
+import os
 import pandas as pd
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, asdict, field
@@ -22,6 +23,7 @@ class PriceChange:
     old_price: Optional[float]
     new_price: float
     change_type: str  # 'increase' | 'decrease' | 'new' | 'removed' | 'discount_change'
+    changed_at: Optional[str] = None  # ISO timestamp from tracking/write_date
 
     def price_diff(self) -> float:
         return 0.0 if self.old_price is None else self.new_price - self.old_price
@@ -327,6 +329,238 @@ class OdooPriceSyncService:
             timestamp=datetime.now().isoformat(),
             total_odoo_products=len(odoo_products),
             total_local_products=len(local_products),
+            changes=changes,
+        )
+        self._save_sync_result(result)
+        return result
+
+    # ------------------------------------------------------------------
+    # Change detection via mail tracking (new)
+    # ------------------------------------------------------------------
+
+    def _get_price_field_id(self) -> Optional[int]:
+        """Cache field_id for product.product.list_price."""
+        try:
+            fields = self.conn_mgr.search_read(
+                "ir.model.fields",
+                domain=[("model", "=", "product.product"), ("name", "=", "list_price")],
+                fields=["id"],
+                limit=1,
+            )
+            return fields[0]["id"] if fields else None
+        except Exception:
+            return None
+
+    def _query_mail_tracking(
+        self, start_date: date, field_id: int
+    ) -> Dict[int, str]:
+        """Query mail.tracking.value for list_price changes since start_date.
+
+        Returns {product_id: create_date} for products with list_price changes.
+        Returns empty dict if tracking unavailable.
+        """
+        try:
+            trackings = self.conn_mgr.search_read(
+                "mail.tracking.value",
+                domain=[
+                    ("field_id", "=", field_id),
+                    ("create_date", ">=", start_date.isoformat()),
+                ],
+                fields=["create_date", "mail_message_id", "new_value_float"],
+                order="create_date desc",
+            )
+        except Exception:
+            return {}
+
+        if not trackings:
+            return {}
+
+        # Resolve res_id via mail.message
+        msg_ids = []
+        for t in trackings:
+            mid = t.get("mail_message_id")
+            if isinstance(mid, (list, tuple)) and mid:
+                msg_ids.append(mid[0])
+
+        if not msg_ids:
+            return {}
+
+        try:
+            msgs = self.conn_mgr.search_read(
+                "mail.message",
+                domain=[("id", "in", msg_ids)],
+                fields=["id", "res_id", "model"],
+            )
+        except Exception:
+            return {}
+
+        # Build {product_id: last_changed_at}
+        result: Dict[int, str] = {}
+        msg_map = {m["id"]: m for m in msgs}
+        for t in trackings:
+            mid = t.get("mail_message_id")
+            if isinstance(mid, (list, tuple)) and mid:
+                mid = mid[0]
+            msg = msg_map.get(mid)
+            if not msg or msg.get("model") != "product.product":
+                continue
+            pid = msg["res_id"]
+            if pid not in result:  # first occurrence = latest
+                result[pid] = t["create_date"]
+        return result
+
+    def _query_write_date_fallback(self, start_date: date) -> List[Dict]:
+        """Fallback: query product.product with write_date filter."""
+        try:
+            return self.conn_mgr.search_read(
+                "product.product",
+                domain=[
+                    ("qty_available", ">", 0),
+                    ("write_date", ">=", start_date.isoformat()),
+                ],
+                fields=["id", "barcode", "name", "list_price", "product_tmpl_id", "write_date"],
+            )
+        except Exception:
+            return []
+
+    def _load_parquet_data(self, parquet_path: str) -> Dict[str, dict]:
+        """Load parquet file into {barcode: {het, diskon}} dict."""
+        if not os.path.exists(parquet_path):
+            return {}
+        try:
+            df = pd.read_parquet(parquet_path)
+            if "barcode" not in df.columns:
+                return {}
+            df["barcode"] = df["barcode"].astype(str).str.strip()
+            has_diskon = "diskon" in df.columns
+            result: Dict[str, dict] = {}
+            for _, row in df.iterrows():
+                bc = row["barcode"]
+                if not bc:
+                    continue
+                result[bc] = {
+                    "het": float(row["het"]) if not pd.isna(row.get("het")) else None,
+                    "diskon": float(row["diskon"]) if has_diskon and not pd.isna(row.get("diskon")) else None,
+                }
+            return result
+        except Exception:
+            return {}
+
+    def _diff_with_parquet(
+        self,
+        odoo_products: List[Dict],
+        parquet_data: Dict[str, dict],
+        changed_map: Dict[int, str],
+    ) -> List[PriceChange]:
+        """Diff Odoo products vs parquet, return changes."""
+        changes: List[PriceChange] = []
+
+        for p in odoo_products:
+            barcode = str(p.get("barcode") or "").strip()
+            name = str(p.get("name") or "").strip()
+            if not barcode or not name:
+                continue
+
+            new_price = float(p.get("list_price") or 0)
+            pid = p["id"]
+            old = parquet_data.get(barcode)
+
+            if old is None:
+                changes.append(PriceChange(
+                    barcode=barcode, name=name,
+                    old_price=None, new_price=new_price,
+                    change_type="new",
+                    changed_at=changed_map.get(pid),
+                ))
+            else:
+                old_price = old.get("het")
+                if old_price is None:
+                    continue
+                if new_price > old_price:
+                    changes.append(PriceChange(
+                        barcode=barcode, name=name,
+                        old_price=old_price, new_price=new_price,
+                        change_type="increase",
+                        changed_at=changed_map.get(pid),
+                    ))
+                elif new_price < old_price:
+                    changes.append(PriceChange(
+                        barcode=barcode, name=name,
+                        old_price=old_price, new_price=new_price,
+                        change_type="decrease",
+                        changed_at=changed_map.get(pid),
+                    ))
+
+        return changes
+
+    def detect_changes_since(self, start_date: date) -> SyncResult:
+        """Detect price changes since start_date.
+
+        Primary: mail.tracking.value for list_price field.
+        Fallback: write_date on product.product.
+
+        Returns SyncResult with changes categorized as increase/decrease/new.
+        """
+        # 1. Load parquet baseline
+        parquet_path = str(
+            Path(__file__).parent.parent / "data" / "products.parquet"
+        )
+        parquet_data = self._load_parquet_data(parquet_path)
+
+        # 2. Try primary: mail tracking
+        field_id = self._get_price_field_id()
+        changed_map: Dict[int, str] = {}
+
+        if field_id is not None:
+            changed_map = self._query_mail_tracking(start_date, field_id)
+
+        # 3. Query Odoo products
+        odoo_products: List[Dict] = []
+        if changed_map:
+            product_ids = list(changed_map.keys())
+            try:
+                odoo_products = self.conn_mgr.search_read(
+                    "product.product",
+                    domain=[
+                        ("id", "in", product_ids),
+                        ("qty_available", ">", 0),
+                    ],
+                    fields=["id", "barcode", "name", "list_price", "product_tmpl_id"],
+                )
+            except Exception:
+                pass
+
+        if not odoo_products:
+            # Fallback: write_date
+            odoo_products = self._query_write_date_fallback(start_date)
+
+        # Also fetch ALL products to detect "new" (in stock, no tracking)
+        try:
+            all_products = self.conn_mgr.search_read(
+                "product.product",
+                domain=[("qty_available", ">", 0)],
+                fields=["id", "barcode", "name", "list_price", "product_tmpl_id"],
+            )
+        except Exception:
+            all_products = []
+
+        if all_products:
+            tracked_ids = {p["id"] for p in odoo_products}
+            for p in all_products:
+                if p["id"] not in tracked_ids:
+                    barcode = str(p.get("barcode") or "").strip()
+                    if barcode and barcode not in parquet_data:
+                        odoo_products.append(p)
+
+        # 4. Diff
+        changes = self._diff_with_parquet(odoo_products, parquet_data, changed_map)
+
+        changes.sort(key=lambda c: _CHANGE_TYPE_ORDER.get(c.change_type, 99))
+
+        result = SyncResult(
+            timestamp=datetime.now().isoformat(),
+            total_odoo_products=len(all_products) if all_products else len(odoo_products),
+            total_local_products=len(parquet_data),
             changes=changes,
         )
         self._save_sync_result(result)
