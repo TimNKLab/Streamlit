@@ -71,10 +71,10 @@ def main():
         "stock_control": ("Stock Control", render_stock_control_page),
         "dsi_report": ("DSI Report", render_dsi_report_page),
         "stock_card": ("Stock Card", render_stock_card_page),
-        "price_sync": ("Price Sync", render_price_sync_page),
-        "price_tag": ("Price Tag", render_price_tag_page),
+        "price_sync": ("Cek Perubahan Harga", render_price_sync_page),
+        "price_tag": ("Cetak Price Tag", render_price_tag_page),
         "internal_moves": ("Internal Moves", render_internal_moves_page),
-        "update_harga": ("Update Harga", render_update_price_page),
+        "update_harga": ("Cek Kenaikan Modal", render_update_price_page),
     }
     
     # Render tab buttons

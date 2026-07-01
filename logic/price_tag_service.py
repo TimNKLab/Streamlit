@@ -468,7 +468,7 @@ class PriceTagService:
 
     @staticmethod
     def _to_float(value) -> Optional[float]:
-        if value is None or value == "" or str(value).lower() == "null":
+        if value is None or value == "" or str(value).lower() in ("null", "nan"):
             return None
         try:
             return float(value)

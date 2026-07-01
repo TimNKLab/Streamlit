@@ -64,14 +64,18 @@ def _build_dataframe(changes: List[PriceChange]) -> pd.DataFrame:
 def _generate_pdf(selected_changes: List[PriceChange]) -> bytes:
     items = []
     tag_service = _get_price_tag_service()
+    # Sync from Odoo so parquet has current het + diskon
+    tag_service.sync_from_odoo()
     for c in selected_changes:
         local = tag_service.lookup_product(c.barcode)
-        items.append({
-            "barcode": c.barcode,
-            "name": c.name,
-            "het": local["het"] if local else c.new_price,
-            "diskon": local.get("diskon") if local else None,
-        })
+        if local:
+            het = local.get("het") or c.new_price
+            diskon = local.get("diskon")
+            diskon = None if diskon != diskon else diskon  # NaN guard
+        else:
+            het = c.new_price
+            diskon = None
+        items.append({"barcode": c.barcode, "name": c.name, "het": het, "diskon": diskon})
     if not items:
         return b""
     return tag_service.generate_pdf(items, size_preset="standard")
