@@ -24,21 +24,22 @@ def test_detect_changes_since_success(service, mocker):
     ])
     mock_parquet_df.return_value = fake_df
 
-    # Mock field_id lookup
+    # Mock field_id lookup (2 calls: product.product + product.template)
     mock_conn.search_read.side_effect = [
-        [{"id": 123}],  # 1. ir.model.fields
-        [                # 2. mail.tracking.value
+        [{"id": 123}],  # 1. ir.model.fields product.product.list_price
+        [{"id": 456}],  # 2. ir.model.fields product.template.list_price
+        [                # 3. mail.tracking.value (field_ids [123, 456])
             {"create_date": "2026-06-28 10:00:00", "mail_message_id": [100],
              "new_value_float": 3800.0},
         ],
-        [                # 3. mail.message
+        [                # 4. mail.message
             {"id": 100, "res_id": 1, "model": "product.product"},
         ],
-        [                # 4. product.product by id
+        [                # 5. product.product by id
             {"id": 1, "barcode": "8991001010049", "name": "Indomie",
              "list_price": 3800.0, "product_tmpl_id": [10]},
         ],
-        [                # 5. all products (for "new" detection)
+        [                # 6. all products (for "new" detection)
             {"id": 1, "barcode": "8991001010049", "name": "Indomie",
              "list_price": 3800.0, "product_tmpl_id": [10]},
         ],
@@ -66,10 +67,11 @@ def test_detect_changes_since_new_product(service, mocker):
     mocker.patch("logic.odoo_price_sync.pd.read_parquet", return_value=empty_df)
 
     mock_conn.search_read.side_effect = [
-        [{"id": 123}],  # field_id
-        [],             # mail.tracking (empty)
-        [],             # write_date fallback (empty)
-        [               # all products
+        [{"id": 123}],  # 1. ir.model.fields product.product
+        [{"id": 456}],  # 2. ir.model.fields product.template
+        [],             # 3. mail.tracking (empty)
+        [],             # 4. write_date fallback (empty)
+        [               # 5. all products
             {"id": 1, "barcode": "8991001010049", "name": "Indomie",
              "list_price": 3500.0, "product_tmpl_id": [10]},
         ],
@@ -89,10 +91,11 @@ def test_detect_changes_since_no_parquet(service, mocker):
     mocker.patch("logic.odoo_price_sync.os.path.exists", return_value=False)
 
     mock_conn.search_read.side_effect = [
-        [{"id": 123}],  # 1. field_id
-        [],             # 2. mail.tracking (empty)
-        [],             # 3. write_date fallback (empty)
-        [                # 4. all products
+        [{"id": 123}],  # 1. ir.model.fields product.product
+        [{"id": 456}],  # 2. ir.model.fields product.template
+        [],             # 3. mail.tracking (empty)
+        [],             # 4. write_date fallback (empty)
+        [                # 5. all products
             {"id": 1, "barcode": "8991001010049", "name": "Indomie",
              "list_price": 3500.0, "product_tmpl_id": [10]},
         ],
@@ -113,10 +116,11 @@ def test_detect_changes_since_empty_range(service, mocker):
     mocker.patch("logic.odoo_price_sync.pd.read_parquet", return_value=empty_df)
 
     mock_conn.search_read.side_effect = [
-        [{"id": 123}],  # field_id
-        [],             # mail.tracking (empty)
-        [],             # write_date fallback (empty)
-        [],             # all products (empty — no qty > 0 in range)
+        [{"id": 123}],  # 1. ir.model.fields product.product
+        [{"id": 456}],  # 2. ir.model.fields product.template
+        [],             # 3. mail.tracking (empty)
+        [],             # 4. write_date fallback (empty)
+        [],             # 5. all products (empty — no qty > 0 in range)
     ]
 
     result = service.detect_changes_since(start_date=date(2026, 6, 1))
@@ -133,9 +137,10 @@ def test_detect_changes_since_write_date_fallback(service, mocker):
     mocker.patch("logic.odoo_price_sync.pd.read_parquet", return_value=empty_df)
 
     mock_conn.search_read.side_effect = [
-        [{"id": 123}],  # field_id
-        [],             # mail.tracking (empty)
-        [                # write_date fallback
+        [{"id": 123}],  # 1. ir.model.fields product.product
+        [{"id": 456}],  # 2. ir.model.fields product.template
+        [],             # 3. mail.tracking (empty)
+        [                # 4. write_date fallback
             {"id": 1, "barcode": "8991001010049", "name": "Indomie",
              "list_price": 3800.0, "product_tmpl_id": [10]},
         ],

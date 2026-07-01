@@ -338,8 +338,15 @@ class OdooPriceSyncService:
     # Change detection via mail tracking (new)
     # ------------------------------------------------------------------
 
-    def _get_price_field_id(self) -> Optional[int]:
-        """Cache field_id for product.product.list_price."""
+    def _get_price_field_ids(self) -> tuple:
+        """Get field_ids for list_price on both product.product and product.template.
+
+        Returns (variant_field_id, template_field_id) — either may be None.
+        Update Harga writes to product.template, mass imports write to
+        product.product, so we must check both to catch all price changes.
+        """
+        variant_fid = None
+        template_fid = None
         try:
             fields = self.conn_mgr.search_read(
                 "ir.model.fields",
@@ -347,23 +354,41 @@ class OdooPriceSyncService:
                 fields=["id"],
                 limit=1,
             )
-            return fields[0]["id"] if fields else None
+            variant_fid = fields[0]["id"] if fields else None
         except Exception:
-            return None
+            pass
+        try:
+            fields = self.conn_mgr.search_read(
+                "ir.model.fields",
+                domain=[("model", "=", "product.template"), ("name", "=", "list_price")],
+                fields=["id"],
+                limit=1,
+            )
+            template_fid = fields[0]["id"] if fields else None
+        except Exception:
+            pass
+        return variant_fid, template_fid
 
     def _query_mail_tracking(
-        self, start_date: date, field_id: int
+        self, start_date: date, variant_fid: int, template_fid: int
     ) -> Dict[int, str]:
         """Query mail.tracking.value for list_price changes since start_date.
 
-        Returns {product_id: create_date} for products with list_price changes.
-        Returns empty dict if tracking unavailable.
+        Handles tracking from BOTH product.product (variant-level, mass import)
+        and product.template (template-level, UI/price update page).
+
+        Returns {variant_product_id: create_date} for products with changes.
         """
+        # Query tracking for both models
+        field_ids = [fid for fid in (variant_fid, template_fid) if fid is not None]
+        if not field_ids:
+            return {}
+
         try:
             trackings = self.conn_mgr.search_read(
                 "mail.tracking.value",
                 domain=[
-                    ("field_id", "=", field_id),
+                    ("field_id", "in", field_ids),
                     ("create_date", ">=", start_date.isoformat()),
                 ],
                 fields=["create_date", "mail_message_id", "new_value_float"],
@@ -375,7 +400,7 @@ class OdooPriceSyncService:
         if not trackings:
             return {}
 
-        # Resolve res_id via mail.message
+        # Resolve res_id + model via mail.message
         msg_ids = []
         for t in trackings:
             mid = t.get("mail_message_id")
@@ -394,19 +419,43 @@ class OdooPriceSyncService:
         except Exception:
             return {}
 
-        # Build {product_id: last_changed_at}
-        result: Dict[int, str] = {}
+        # Build result: {res_id: last_changed_at}
         msg_map = {m["id"]: m for m in msgs}
+        result: Dict[int, str] = {}
+        template_ids: set = set()
+
         for t in trackings:
             mid = t.get("mail_message_id")
             if isinstance(mid, (list, tuple)) and mid:
                 mid = mid[0]
             msg = msg_map.get(mid)
-            if not msg or msg.get("model") != "product.product":
+            if not msg:
                 continue
-            pid = msg["res_id"]
-            if pid not in result:  # first occurrence = latest
-                result[pid] = t["create_date"]
+            rid = msg["res_id"]
+            if rid not in result:  # first occurrence = latest (ordered desc)
+                result[rid] = t["create_date"]
+            model = msg.get("model")
+            if model == "product.template":
+                template_ids.add(rid)
+
+        # Map template_ids → variant product IDs
+        if template_ids:
+            try:
+                variants = self.conn_mgr.search_read(
+                    "product.product",
+                    domain=[("product_tmpl_id", "in", list(template_ids))],
+                    fields=["id", "product_tmpl_id"],
+                )
+                for v in variants:
+                    vid = v["id"]
+                    ptid = v.get("product_tmpl_id")
+                    if isinstance(ptid, (list, tuple)) and ptid:
+                        ptid = ptid[0]
+                    if ptid in result and vid not in result:
+                        result[vid] = result[ptid]
+            except Exception:
+                pass
+
         return result
 
     def _query_write_date_fallback(self, start_date: date) -> List[Dict]:
@@ -507,12 +556,14 @@ class OdooPriceSyncService:
         )
         parquet_data = self._load_parquet_data(parquet_path)
 
-        # 2. Try primary: mail tracking
-        field_id = self._get_price_field_id()
+        # 2. Try primary: mail tracking (check BOTH models)
+        variant_fid, template_fid = self._get_price_field_ids()
         changed_map: Dict[int, str] = {}
 
-        if field_id is not None:
-            changed_map = self._query_mail_tracking(start_date, field_id)
+        if variant_fid is not None or template_fid is not None:
+            changed_map = self._query_mail_tracking(
+                start_date, variant_fid, template_fid
+            )
 
         # 3. Query Odoo products
         odoo_products: List[Dict] = []
