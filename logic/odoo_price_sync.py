@@ -458,6 +458,10 @@ class OdooPriceSyncService:
             except Exception:
                 pass
 
+        # Remove template IDs — only variant IDs go to caller
+        for tid in template_ids:
+            result.pop(tid, None)
+
         return result
 
     def _query_write_date_fallback(self, start_date: date) -> List[Dict]:
@@ -526,7 +530,12 @@ class OdooPriceSyncService:
             changed_at, old_price = entry
 
             if old_price is None:
-                # No old value in tracking → can't diff, treat as new
+                changes.append(PriceChange(
+                    barcode=barcode, name=name,
+                    old_price=None, new_price=new_price,
+                    change_type="new",
+                    changed_at=changed_at,
+                ))
                 continue
 
             if new_price > old_price:
@@ -546,30 +555,64 @@ class OdooPriceSyncService:
 
         return changes
 
+    def _detect_new_products_since(self, start_date: date) -> List[PriceChange]:
+        """Detect products created since start_date that are not yet in parquet.
+        Queries product.product with create_date >= start_date, qty > 0,
+        and barcode not empty. Filters out barcodes already known in parquet.
+        """
+        parquet_path = str(
+            Path(__file__).parent.parent / "data" / "products.parquet"
+        )
+        parquet_data = self._load_parquet_data(parquet_path)
+
+        try:
+            products = self.conn_mgr.search_read(
+                "product.product",
+                domain=[
+                    ("create_date", ">=", start_date.isoformat()),
+                    ("qty_available", ">", 0),
+                    ("barcode", "!=", False),
+                ],
+                fields=["id", "barcode", "name", "list_price", "product_tmpl_id"],
+            )
+        except Exception:
+            return []
+
+        changes: List[PriceChange] = []
+        for p in products:
+            barcode = str(p.get("barcode") or "").strip()
+            name = str(p.get("name") or "").strip()
+            if not barcode or not name:
+                continue
+            if barcode in parquet_data:
+                continue  # already known, not "new" to us
+            changes.append(PriceChange(
+                barcode=barcode, name=name,
+                old_price=None,
+                new_price=float(p.get("list_price") or 0),
+                change_type="new",
+            ))
+        return changes
+
     def detect_changes_since(self, start_date: date) -> SyncResult:
         """Detect price changes since start_date.
 
         Primary: mail.tracking.value for list_price field —
         uses old_value_float as baseline, NOT parquet.
 
+        New products: query product.product create_date >= start_date.
+
         Returns SyncResult with changes categorized as increase/decrease/new.
         """
-        # 1. Load parquet baseline (only for "new" product detection)
-        parquet_path = str(
-            Path(__file__).parent.parent / "data" / "products.parquet"
-        )
-        parquet_data = self._load_parquet_data(parquet_path)
-
-        # 2. Try primary: mail tracking (check BOTH models)
+        # 1. Mail tracking (primary)
         variant_fid, template_fid = self._get_price_field_ids()
         changed_map: Dict[int, tuple] = {}
-
         if variant_fid is not None or template_fid is not None:
             changed_map = self._query_mail_tracking(
                 start_date, variant_fid, template_fid
             )
 
-        # 3. Query Odoo products that have tracking entries
+        # 2. Query tracked products from Odoo
         odoo_products: List[Dict] = []
         if changed_map:
             product_ids = list(changed_map.keys())
@@ -585,72 +628,24 @@ class OdooPriceSyncService:
             except Exception:
                 pass
 
-        if not odoo_products:
-            # Fallback: write_date — no old_price available, treat as new
-            odoo_products = self._query_write_date_fallback(start_date)
-
-        # 4. Also fetch ALL products to detect "new" (in stock, no tracking entry)
-        #    New = exists in Odoo but not in parquet
-        try:
-            all_products = self.conn_mgr.search_read(
-                "product.product",
-                domain=[("qty_available", ">", 0)],
-                fields=["id", "barcode", "name", "list_price", "product_tmpl_id"],
-            )
-        except Exception:
-            all_products = []
-
-        new_changes: List[PriceChange] = []
-        if all_products:
-            tracked_ids = {p["id"] for p in odoo_products}
-            for p in all_products:
-                if p["id"] not in tracked_ids:
-                    barcode = str(p.get("barcode") or "").strip()
-                    if barcode and barcode not in parquet_data:
-                        new_changes.append(PriceChange(
-                            barcode=barcode,
-                            name=str(p.get("name") or "").strip(),
-                            old_price=None,
-                            new_price=float(p.get("list_price") or 0),
-                            change_type="new",
-                        ))
-
-        # 5. Diff using tracking old_value_float
+        # 3. Diff tracking old_value_float → changes
         changes = self._diff_with_tracking(odoo_products, changed_map)
 
-        # 5b. Fallback products (write_date) aren't in changed_map —
-        #     diff them against parquet instead
-        if not changed_map and odoo_products:
-            for p in odoo_products:
-                barcode = str(p.get("barcode") or "").strip()
-                name = str(p.get("name") or "").strip()
-                if not barcode or not name:
-                    continue
-                new_price = float(p.get("list_price") or 0)
-                old = parquet_data.get(barcode)
-                if old is None:
-                    changes.append(PriceChange(
-                        barcode=barcode, name=name,
-                        old_price=None, new_price=new_price,
-                        change_type="new",
-                    ))
-                else:
-                    old_price = old.get("het")
-                    if old_price is not None and new_price != old_price:
-                        changes.append(PriceChange(
-                            barcode=barcode, name=name,
-                            old_price=old_price, new_price=new_price,
-                            change_type="increase" if new_price > old_price else "decrease",
-                        ))
+        # 4. New products (by create_date, not in parquet)
+        new_changes = self._detect_new_products_since(start_date)
         changes.extend(new_changes)
 
         changes.sort(key=lambda c: _CHANGE_TYPE_ORDER.get(c.change_type, 99))
 
-        changes.sort(key=lambda c: _CHANGE_TYPE_ORDER.get(c.change_type, 99))
+        # 5. Parquet metadata for SyncResult
+        parquet_path = str(
+            Path(__file__).parent.parent / "data" / "products.parquet"
+        )
+        parquet_data = self._load_parquet_data(parquet_path)
 
         result = SyncResult(
             timestamp=datetime.now().isoformat(),
-            total_odoo_products=len(all_products) if all_products else len(odoo_products),
+            total_odoo_products=len(odoo_products) + len(new_changes),
             total_local_products=len(parquet_data),
             changes=changes,
         )

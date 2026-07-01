@@ -8,3 +8,4 @@ Task 7 (session): complete (commits d73412c..cc62d5d, review clean)
 Task 8 (cetak semua UI): complete (commits cc62d5d..f770364, review pending)
 Task 9 (remove legacy): complete (commits f770364..4b46c98)
 Task 10 (docs): complete (commits 4b46c98..4c3ac3a)
+Task 1 (2026-07-01 refinement): done — template ID cleanup applied

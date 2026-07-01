@@ -84,11 +84,10 @@ def test_detect_changes_since_new_product(service, mocker):
     mocker.patch("logic.odoo_price_sync.pd.read_parquet", return_value=empty_df)
 
     mock_conn.search_read.side_effect = [
-        [{"id": 123}],
-        [{"id": 456}],
-        [],  # mail.tracking empty
-        [],  # write_date fallback (no write_date changes in range)
-        [   # all products (for "new" detection)
+        [{"id": 123}],  # 1. ir.model.fields product.product.list_price
+        [{"id": 456}],  # 2. ir.model.fields product.template.list_price
+        [],              # 3. mail.tracking.value — empty
+        [                # 4. _detect_new_products_since: create_date query
             {"id": 1, "barcode": "8991001010049", "name": "Indomie",
              "list_price": 3500.0, "product_tmpl_id": [10]},
         ],
@@ -107,11 +106,10 @@ def test_detect_changes_since_no_parquet(service, mocker):
     mocker.patch("logic.odoo_price_sync.os.path.exists", return_value=False)
 
     mock_conn.search_read.side_effect = [
-        [{"id": 123}],
-        [{"id": 456}],
-        [],  # mail.tracking empty
-        [],  # write_date fallback empty
-        [   # all products
+        [{"id": 123}],  # 1. ir.model.fields product.product.list_price
+        [{"id": 456}],  # 2. ir.model.fields product.template.list_price
+        [],              # 3. mail.tracking.value — empty
+        [                # 4. _detect_new_products_since: create_date query
             {"id": 1, "barcode": "8991001010049", "name": "Indomie",
              "list_price": 3500.0, "product_tmpl_id": [10]},
         ],
@@ -132,11 +130,10 @@ def test_detect_changes_since_empty_range(service, mocker):
     mocker.patch("logic.odoo_price_sync.pd.read_parquet", return_value=empty_df)
 
     mock_conn.search_read.side_effect = [
-        [{"id": 123}],
-        [{"id": 456}],
-        [],  # mail.tracking empty
-        [],  # write_date fallback empty
-        [],  # all products empty
+        [{"id": 123}],  # 1. ir.model.fields product.product
+        [{"id": 456}],  # 2. ir.model.fields product.template
+        [],              # 3. mail.tracking empty
+        [],              # 4. _detect_new_products_since — empty
     ]
 
     result = service.detect_changes_since(start_date=date(2026, 6, 1))
@@ -144,8 +141,8 @@ def test_detect_changes_since_empty_range(service, mocker):
     assert len(result.changes) == 0
 
 
-def test_detect_changes_since_write_date_fallback(service, mocker):
-    """When mail.tracking empty, fallback to write_date — no old_price."""
+def test_detect_changes_since_new_via_create_date(service, mocker):
+    """Product created in range, not in parquet → detected as 'new'."""
     mock_conn = mocker.patch.object(service, "conn_mgr")
     mocker.patch("logic.odoo_price_sync.os.path.exists", return_value=True)
     import pandas as pd
@@ -153,17 +150,19 @@ def test_detect_changes_since_write_date_fallback(service, mocker):
     mocker.patch("logic.odoo_price_sync.pd.read_parquet", return_value=empty_df)
 
     mock_conn.search_read.side_effect = [
-        [{"id": 123}],
-        [{"id": 456}],
-        [],  # mail.tracking empty
-        [   # write_date fallback — all returned as "new" since no old_price
-            {"id": 1, "barcode": "8991001010049", "name": "Indomie",
-             "list_price": 3800.0, "product_tmpl_id": [10]},
+        [{"id": 123}],          # 1. ir.model.fields product.product
+        [{"id": 456}],          # 2. ir.model.fields product.template
+        [],                      # 3. mail.tracking — empty
+        [                        # 4. _detect_new_products_since hits
+            {"id": 99, "barcode": "8889990001111", "name": "New Product",
+             "list_price": 5000.0, "product_tmpl_id": [50]},
         ],
     ]
 
     result = service.detect_changes_since(start_date=date(2026, 6, 1))
 
-    # write_date fallback: all products with write_date in range → new
-    # (can't determine increase/decrease without tracking old_value)
-    assert len(result.changes) >= 1
+    new = [c for c in result.changes if c.change_type == "new"]
+    assert len(new) == 1
+    assert new[0].barcode == "8889990001111"
+    assert new[0].new_price == 5000.0
+    assert new[0].old_price is None

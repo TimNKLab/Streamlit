@@ -63,17 +63,18 @@ def _build_dataframe(changes: List[PriceChange]) -> pd.DataFrame:
 
 def _generate_pdf(selected_changes: List[PriceChange]) -> bytes:
     items = []
+    tag_service = _get_price_tag_service()
     for c in selected_changes:
+        local = tag_service.lookup_product(c.barcode)
         items.append({
             "barcode": c.barcode,
             "name": c.name,
-            "het": c.new_price,
-            "diskon": None,
+            "het": local["het"] if local else c.new_price,
+            "diskon": local.get("diskon") if local else None,
         })
     if not items:
         return b""
-    service = _get_price_tag_service()
-    return service.generate_pdf(items, size_preset="standard")
+    return tag_service.generate_pdf(items, size_preset="standard")
 
 
 def render_price_sync_page() -> None:
