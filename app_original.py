@@ -1275,7 +1275,7 @@ if __name__ == "__main__":
         """
         <hr style="margin-top: 3em; margin-bottom: 0.5em;">
         <div style="text-align: center; color: gray; font-size: 0.95em;">
-            Dibuat dengan ❤️, dari Tim Data NK.
+            Dibuat dengan ❤️, dari Tim Data New Khatulistiwa.
         </div>
         """,
         unsafe_allow_html=True
