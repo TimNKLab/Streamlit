@@ -274,7 +274,7 @@ def _render_analysis(service: PriceUpdateService, raw_rows: List[Dict[str, Any]]
             "Modal Lama": st.column_config.TextColumn("Modal Lama", disabled=True),
             "Modal Baru": st.column_config.TextColumn("Modal Baru", disabled=True),
             "Harga→Fix": st.column_config.TextColumn("Harga→Fix", disabled=True, width="small"),
-            "Terakhir Diupdate": st.column_config.TextColumn("Terakhir Diupdate", disabled=True, width="medium", help="Terakhir kali harga jual (list_price) berubah via tracking Odoo. '-' jika tidak ada riwayat perubahan harga."),
+            "Terakhir Diupdate": st.column_config.TextColumn("Terakhir Diupdate", disabled=True, width="medium", help="Terakhir kali harga jual berubah via mail.tracking Odoo. '-' jika tidak ada riwayat (update via import massal tidak tercatat)."),
             "Promo": st.column_config.TextColumn("Promo", disabled=True, width="small"),
             "Periode Promo": st.column_config.TextColumn("Periode Promo", disabled=True),
             "Barcode": st.column_config.TextColumn("Barcode", disabled=True),

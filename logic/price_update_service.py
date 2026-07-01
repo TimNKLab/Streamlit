@@ -16,6 +16,7 @@ class PriceUpdateService:
         self.conn = connection_manager
         self._tax_map: Dict[int, float] = {}
         self._price_field_id: int | None = None
+        self._variant_price_field_id: int | None = None
         self._init_tax_map()
         self._init_price_field_id()
 
@@ -38,11 +39,11 @@ class PriceUpdateService:
             self._tax_map[int(t["id"])] = mult
 
     def _init_price_field_id(self) -> None:
-        """Cache ir.model.fields id for product.template.list_price.
+        """Cache ir.model.fields id for product.template.list_price and product.product.list_price.
 
         Used by analyze_bill to query mail.tracking.value for price-specific
-        timestamps (more accurate than write_date which tracks ANY field change).
-        Falls back to None if field not found — write_date used instead.
+        timestamps. product.template catches UI saves; product.product catches
+        mass updates (import xls/csv) that target variant model directly.
         """
         try:
             fields = self.conn.search_read(
@@ -54,6 +55,17 @@ class PriceUpdateService:
             self._price_field_id = fields[0]["id"] if fields else None
         except Exception:
             self._price_field_id = None
+
+        try:
+            fields = self.conn.search_read(
+                "ir.model.fields",
+                domain=[("model", "=", "product.product"), ("name", "=", "list_price")],
+                fields=["id"],
+                limit=1,
+            )
+            self._variant_price_field_id = fields[0]["id"] if fields else None
+        except Exception:
+            self._variant_price_field_id = None
 
     def get_recent_bills(self) -> List[Dict[str, Any]]:
         """Return 20 most recent vendor bills (in_invoice)."""
@@ -309,36 +321,58 @@ class PriceUpdateService:
                 raise OdooIntegrationError("Failed to fetch pricelist items.") from exc
 
         # ── 5. Batch: price change timestamps via mail.tracking.value ────
-        # More accurate than write_date (which tracks ANY field modification).
+        # Query BOTH product.template (UI saves) and product.product (mass
+        # import/csv, which target variant model directly).  Map variant →
+        # template via pid_info so one dict per template covers both sources.
         price_updates: Dict[int, str] = {}
         if self._price_field_id and template_ids:
+            field_ids = [self._price_field_id]
+            if self._variant_price_field_id:
+                field_ids.append(self._variant_price_field_id)
+
             try:
                 msgs = self.conn.search_read(
                     "mail.message",
-                    domain=[("model", "=", "product.template"),
-                            ("res_id", "in", template_ids)],
-                    fields=["id", "res_id", "date"],
+                    domain=[
+                        "|",
+                        "&", ("model", "=", "product.template"),
+                             ("res_id", "in", template_ids),
+                        "&", ("model", "=", "product.product"),
+                             ("res_id", "in", variant_ids),
+                    ],
+                    fields=["id", "res_id", "model", "date"],
                     order="date desc",
                 )
                 msg_ids = [m["id"] for m in msgs]
-                msg_res = {m["id"]: m["res_id"] for m in msgs}
+                msg_info: Dict[int, tuple] = {m["id"]: (m["res_id"], m["model"]) for m in msgs}
+
                 if msg_ids:
                     trackings = self.conn.search_read(
                         "mail.tracking.value",
                         domain=[("mail_message_id", "in", msg_ids),
-                                ("field_id", "=", self._price_field_id)],
+                                ("field_id", "in", field_ids)],
                         fields=["create_date", "mail_message_id"],
                         order="create_date desc",
                     )
-                    seen = set()
+                    seen: set = set()
                     for tv in trackings:
                         mid = tv["mail_message_id"]
                         if isinstance(mid, (list, tuple)):
                             mid = mid[0]
-                        res = msg_res.get(mid)
-                        if res and res not in seen:
-                            seen.add(res)
-                            price_updates[res] = tv["create_date"]
+                        info = msg_info.get(mid)
+                        if not info:
+                            continue
+                        res_id, model = info
+                        if model == "product.template":
+                            tmpl_id = res_id
+                        elif model == "product.product":
+                            info_v = pid_info.get(res_id)
+                            tmpl_id = info_v["template_id"] if info_v else None
+                        else:
+                            continue
+                        if tmpl_id and tmpl_id not in seen:
+                            seen.add(tmpl_id)
+                            price_updates[tmpl_id] = tv["create_date"]
             except Exception:
                 # Tracking data optional — fallback to write_date
                 pass
