@@ -11,7 +11,6 @@ from datetime import datetime
 from logic.price_tag_service import PriceTagService
 from utils.persistence import save_session, restore_session, clear_session
 from odoo.vendor_bill_services import get_vendor_bill_lines_by_number
-from utils.indexeddb_bridge import IndexedDBBridge
 
 # Module-level constants
 _BARCODE_COLUMN_NAMES = frozenset(['barcode', 'barcodes', 'kode', 'sku', 'code'])
@@ -716,12 +715,12 @@ class PriceTagPage:
     # Thermal section
     # ------------------------------------------------------------------
 
-    def _resolve_het_from_indexeddb(self, indexeddb: IndexedDBBridge, barcode: str, fallback_het) -> float | None:
-        """Resolve HET via IndexedDB (bridge instance passed in to avoid per-call init)."""
+    def _resolve_het_from_price_tag(self, barcode: str, fallback_het) -> float | None:
+        """Resolve HET via PriceTagService (replaces IndexedDBBridge)."""
         try:
-            cached = indexeddb.get_product(barcode)
-            if cached and cached.get("het") is not None:
-                return float(cached["het"])
+            product = self.service.lookup_product(barcode)
+            if product and product.get("het") is not None:
+                return float(product["het"])
         except Exception:
             pass
         try:
@@ -731,8 +730,6 @@ class PriceTagPage:
 
     def _build_thermal_items(self, lines: list[dict]) -> list[dict]:
         """Build repeated thermal label items from line dicts."""
-        # Single IndexedDBBridge instance for all lookups
-        indexeddb = IndexedDBBridge()
         items = []
         for line in lines:
             barcode = str(line.get("barcode") or "").strip()
@@ -742,7 +739,7 @@ class PriceTagPage:
             qty = _parse_price(line.get("qty")) or 0
             if qty <= 0:
                 continue
-            het = self._resolve_het_from_indexeddb(indexeddb, barcode, line.get("het"))
+            het = self._resolve_het_from_price_tag(barcode, line.get("het"))
             entry = {"barcode": barcode, "name": name, "het": het}
             items.extend([entry] * qty)
         return items
