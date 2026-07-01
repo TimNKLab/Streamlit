@@ -4,6 +4,7 @@ import streamlit as st
 import pandas as pd
 from datetime import date, datetime, timedelta
 from typing import List
+from zoneinfo import ZoneInfo
 
 from logic.odoo_price_sync import OdooPriceSyncService, PriceChange, SyncResult
 from logic.price_tag_service import PriceTagService
@@ -46,7 +47,16 @@ def _build_dataframe(changes: List[PriceChange]) -> pd.DataFrame:
         old = f"Rp {c.old_price:,.0f}" if c.old_price else "-"
         new = f"Rp {c.new_price:,.0f}"
         diff = f"Rp {c.price_diff():,.0f}" if c.old_price else "-"
-        changed_at = str(c.changed_at)[:19] if c.changed_at else "-"
+        changed_at = ""
+        if c.changed_at:
+            try:
+                dt = datetime.fromisoformat(str(c.changed_at).replace(" ", "T"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+                dt_wib = dt.astimezone(ZoneInfo("Asia/Jakarta"))
+                changed_at = dt_wib.strftime("%d/%m/%Y %H:%M")
+            except (ValueError, AttributeError):
+                changed_at = str(c.changed_at)[:19]
         rows.append({
             "Type": f"{emoji} {c.change_type.title()}",
             "Barcode": c.barcode,
