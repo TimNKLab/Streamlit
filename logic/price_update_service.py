@@ -213,6 +213,18 @@ class PriceUpdateService:
         if not positive:
             return []
 
+        # Get bill's invoice_date for guardrail
+        try:
+            bill_record = self.conn.search_read(
+                "account.move",
+                domain=[("id", "=", bill_id)],
+                fields=["invoice_date"],
+                limit=1,
+            )
+            invoice_date = str(bill_record[0].get("invoice_date", ""))[:10] if bill_record else ""
+        except Exception:
+            invoice_date = ""
+
         # ── 1. Collect variant IDs from invoice lines ────────────────────
         variant_ids: List[int] = []
         line_map: Dict[int, Dict[str, Any]] = {}
@@ -477,6 +489,17 @@ class PriceUpdateService:
                 "fixed_price_baru": promo_price or list_price,
                 "price_last_updated": price_updates.get(tid),
             })
+
+        # Guardrail: filter out products whose price was updated on/after invoice_date
+        # Prevents double-increase when user re-runs the same bill after already updating prices.
+        if invoice_date:
+            before = len(rows)
+            rows = [
+                r for r in rows
+                if not r.get("price_last_updated") or str(r["price_last_updated"])[:10] < invoice_date
+            ]
+            if before - len(rows):
+                print(f"[GUARD] Filtered {before - len(rows)} products already updated on/after {invoice_date}")
 
         return rows
 
