@@ -87,24 +87,37 @@ def render_price_sync_page() -> None:
 
     service = _get_sync_service()
 
-    # Date range selector
+    # Date range selector with datetime picker
     col1, col2, col3 = st.columns([2, 2, 1])
     with col1:
-        range_option = st.selectbox(
-            "Rentang Waktu",
-            options=[3, 7, 14, 30],
-            format_func=lambda x: f"{x} Hari Terakhir",
-            index=1,  # default 7 hari
-            key="sync_range",
+        start_date = st.date_input(
+            "Dari Tanggal",
+            value=date.today() - timedelta(days=7),
+            max_value=date.today(),
+            key="sync_picker_start",
         )
     with col2:
-        if range_option == 30:
-            st.warning("⚠️ Range 30 hari mungkin membutuhkan waktu lebih lama")
-        start_date = date.today() - timedelta(days=range_option)
-        st.caption(f"Perubahan sejak {start_date.isoformat()}")
+        end_date = st.date_input(
+            "Sampai Tanggal",
+            value=date.today(),
+            max_value=date.today(),
+            key="sync_picker_end",
+        )
     with col3:
         st.markdown("###")
         detect_clicked = st.button("🔍 Deteksi", type="primary", use_container_width=True)
+
+    # Validate range
+    if start_date and end_date:
+        diff_days = (end_date - start_date).days
+        if diff_days < 0:
+            st.error("❌ Tanggal akhir harus setelah tanggal awal")
+            detect_clicked = False
+        elif diff_days > 30:
+            st.warning("⚠️ Maksimal 30 hari. Pilih rentang yang lebih pendek.")
+            detect_clicked = False
+        elif diff_days >= 14:
+            st.warning("⚠️ Range 14+ hari mungkin membutuhkan waktu lebih lama")
 
     if detect_clicked:
         with st.spinner("Mendeteksi perubahan harga..."):
