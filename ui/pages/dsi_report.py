@@ -1,32 +1,167 @@
 """DSI Report page UI"""
 
 import streamlit as st
+import pandas as pd
+from datetime import date, timedelta
+
+from logic.dsi_service import compute_dsi_report, classify_dsi
+
 
 def render_dsi_report_page():
     """Render DSI Report page content"""
     st.title("📋 DSI Report")
     st.markdown("### Days Sales of Inventory Report")
-    
-    st.info("This page will display Days Sales of Inventory (DSI) analysis and metrics.")
-    
-    st.subheader("📊 DSI Overview")
-    st.text("Key DSI metrics and indicators will be displayed here.")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown("#### Current DSI")
-        st.metric("Average DSI", "---", "---")
-        st.text("Detailed DSI calculations will be shown here.")
-    
-    with col2:
-        st.markdown("#### DSI Trends")
-        st.text("Historical DSI trends and patterns will be visualized here.")
-    
-    st.markdown("---")
-    st.subheader("📈 Analysis by Category")
-    st.text("DSI breakdown by product category will be available here.")
-    
-    st.markdown("---")
-    st.subheader("⚠️ Alerts & Recommendations")
-    st.text("DSI-related alerts and optimization recommendations will be provided here.")
+
+    # --- Form Section ---
+    with st.form("dsi_form"):
+        col1, col2 = st.columns(2)
+
+        with col1:
+            today = date.today()
+            default_start = today - timedelta(days=30)
+            date_range = st.date_input(
+                "📅 Date Range",
+                value=(default_start, today),
+                max_value=today,
+            )
+
+        with col2:
+            brand_input = st.text_input(
+                "🏷️ Brand Filter (comma-separated, optional)",
+                placeholder="e.g. Paragon, Wardah, Make Over",
+            )
+
+        submitted = st.form_submit_button(
+            "🔍 Generate DSI Report",
+            type="primary",
+            use_container_width=True,
+        )
+
+    # --- Process ---
+    if submitted:
+        if len(date_range) != 2:
+            st.error("❌ Pilih tanggal awal dan akhir.")
+            return
+
+        date_from, date_to = date_range
+        brand_filter = None
+        if brand_input.strip():
+            brand_filter = [b.strip() for b in brand_input.split(",") if b.strip()]
+
+        with st.spinner("Menghitung DSI..."):
+            try:
+                df = compute_dsi_report(
+                    date_from=date_from,
+                    date_to=date_to,
+                )
+                # Apply brand filter client-side since brand is a placeholder
+                if brand_filter and "brand" in df.columns:
+                    mask = df["brand"].str.lower().isin([b.lower() for b in brand_filter])
+                    df = df[mask]
+
+                st.session_state.dsi_results = df
+                st.session_state.dsi_params = {
+                    "date_from": date_from,
+                    "date_to": date_to,
+                    "brand_filter": brand_filter,
+                }
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Error: {e}")
+
+    # --- Results Section ---
+    if "dsi_results" in st.session_state and st.session_state.dsi_results is not None:
+        df = st.session_state.dsi_results
+        params = st.session_state.get("dsi_params", {})
+
+        if df.empty:
+            st.warning("⚠️ Tidak ada data ditemukan untuk filter yang dipilih.")
+            return
+
+        # Summary metrics
+        st.markdown("---")
+        st.subheader("📊 Summary")
+
+        # Define classification order and colors
+        classification_order = {
+            "Very Fast": "🟢",
+            "Fast": "🔵",
+            "Normal": "⟡",
+            "Slow": "🟠",
+            "Dead": "🔴",
+        }
+
+        total = len(df)
+        st.metric("Total Products", total)
+
+        display_cols = st.columns(5)
+        col_idx = 0
+        for label, icon in classification_order.items():
+            count = len(df[df["classification"] == label])
+            with display_cols[col_idx]:
+                st.metric(f"{icon} {label}", f"{count} ({count/total*100:.0f}%)")
+            col_idx += 1
+
+        # Classification distribution chart
+        st.markdown("---")
+        st.subheader("📈 Distribution")
+
+        # Count by classification in order
+        class_counts = {}
+        for label in classification_order:
+            class_counts[label] = len(df[df["classification"] == label])
+
+        chart_df = pd.DataFrame({
+            "classification": list(class_counts.keys()),
+            "count": list(class_counts.values()),
+        }).set_index("classification")
+
+        st.bar_chart(chart_df)
+
+        # Results table
+        st.markdown("---")
+        st.subheader("📋 DSI Details")
+
+        # Format for display
+        display_df = df.copy()
+        if "dsi" in display_df.columns:
+            display_df["dsi"] = display_df["dsi"].apply(
+                lambda x: f"{x:.1f}" if pd.notna(x) else "-"
+            )
+        if "cogs" in display_df.columns:
+            display_df["cogs"] = display_df["cogs"].apply(
+                lambda x: f"Rp {x:,.0f}" if pd.notna(x) and x > 0 else "-"
+            )
+
+        st.dataframe(
+            display_df[[
+                "barcode", "name", "category",
+                "beginning_qty", "ending_qty", "avg_qty",
+                "cogs", "dsi", "classification",
+            ]],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        # Download button
+        st.markdown("---")
+        csv = df.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            label="📥 Download CSV",
+            data=csv,
+            file_name=f"dsi_report_{params.get('date_from', 'export')}.csv",
+            mime="text/csv",
+        )
+
+        # Help section
+        st.markdown("---")
+        with st.expander("ℹ️ Cara Membaca DSI Report"):
+            st.markdown("""
+            **DSI (Days Sales of Inventory)** = (Rata-rata Inventory / COGS) x Hari
+
+            - **Very Fast (0-30 hr):** Barang laku cepat, stok habis <=1 bulan
+            - **Fast (31-60 hr):** Barang laku dalam 1-2 bulan
+            - **Normal (61-90 hr):** Perputaran sehat
+            - **Slow (91-180 hr):** Lambat bergerak, perlu perhatian
+            - **Dead (>180 hr):** Stok mati, pertimbangkan diskon atau write-off
+            """)
