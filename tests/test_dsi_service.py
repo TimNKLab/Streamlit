@@ -104,3 +104,45 @@ def test_compute_dsi_report_empty():
         df = compute_dsi_report(date(2026, 1, 1), date(2026, 1, 31))
     assert isinstance(df, pd.DataFrame)
     assert df.empty
+
+
+def test_classify_dsi_boundary_30():
+    assert classify_dsi(30) == "Very Fast"
+
+
+def test_classify_dsi_boundary_31():
+    assert classify_dsi(31) == "Fast"
+
+
+def test_classify_dsi_boundary_60():
+    assert classify_dsi(60) == "Fast"
+
+
+def test_classify_dsi_boundary_61():
+    assert classify_dsi(61) == "Normal"
+
+
+def test_classify_dsi_boundary_90():
+    assert classify_dsi(90) == "Normal"
+
+
+def test_classify_dsi_boundary_91():
+    assert classify_dsi(91) == "Slow"
+
+
+def test_classify_dsi_boundary_180():
+    assert classify_dsi(180) == "Slow"
+
+
+def test_classify_dsi_boundary_181():
+    assert classify_dsi(181) == "Dead"
+
+
+def test_calculate_dsi_negative_cogs():
+    result = calculate_dsi(
+        beginning_qty=100,
+        ending_qty=50,
+        cogs=-100,
+        days=30,
+    )
+    assert result is None
