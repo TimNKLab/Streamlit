@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import date
 from typing import Any, Dict, List, Optional
 
@@ -19,22 +18,6 @@ THRESHOLDS = {
     "Slow": (91, 180),
     "Dead": (181, float("inf")),
 }
-
-
-@dataclass
-class DSIResult:
-    """DSI calculation result for a single product."""
-    product_id: int
-    barcode: str
-    name: str
-    brand: str
-    categ: str
-    beginning_qty: float
-    ending_qty: float
-    avg_qty: float
-    cogs: float
-    dsi: Optional[float]
-    classification: str
 
 
 def classify_dsi(dsi: float) -> str:
@@ -67,16 +50,16 @@ def _get_valuation_layers(
 
     Returns: {product_id: {"qty": float, "value": float}}
     """
-    if not product_ids:
-        return {}
+    domain = [
+        ("create_date", ">=", date_from.isoformat()),
+        ("create_date", "<=", date_to.isoformat()),
+    ]
+    if product_ids:
+        domain.insert(0, ("product_id", "in", product_ids))
 
     rows = connection_manager.search_read(
         model_name="stock.valuation.layer",
-        domain=[
-            ("product_id", "in", product_ids),
-            ("create_date", ">=", date_from.isoformat()),
-            ("create_date", "<=", date_to.isoformat()),
-        ],
+        domain=domain,
         fields=["product_id", "remaining_qty", "remaining_value"],
         limit=None,
     )
@@ -127,7 +110,6 @@ def _get_product_info(product_ids: List[int]) -> Dict[int, Dict[str, str]]:
 def compute_dsi_report(
     date_from: date,
     date_to: date,
-    brand_filter: Optional[List[str]] = None,
 ) -> pd.DataFrame:
     """Compute DSI report for all products with valuation data."""
     days = (date_to - date_from).days
@@ -151,7 +133,7 @@ def compute_dsi_report(
         end = ending.get(pid, {"qty": 0, "value": 0})
 
         avg_qty = (beg["qty"] + end["qty"]) / 2
-        cogs = end["value"]
+        cogs = end["value"]  # ponytail: end["value"] as COGS proxy; real COGS needs stock move analysis
 
         dsi = calculate_dsi(beg["qty"], end["qty"], cogs, days)
         classification = classify_dsi(dsi) if dsi is not None else "Unknown"
@@ -171,9 +153,6 @@ def compute_dsi_report(
         })
 
     df = pd.DataFrame(records)
-
-    if brand_filter and "brand" in df.columns:
-        df = df[df["brand"].isin(brand_filter)]
 
     df = df.sort_values("dsi", ascending=True, na_position="last")
     df = df.reset_index(drop=True)
