@@ -48,6 +48,11 @@ def _get_valuation_layers(
 ) -> Dict[int, Dict[str, float]]:
     """Fetch stock valuation layers for products in date range.
 
+    Note: remaining_qty reflects current unconsumed qty, not a date-bound
+    historical snapshot — inventory at date may be approximate for products
+    with post-period movement.
+    ponytail: for accurate at-date inventory, use stock.quant.history when available.
+
     Returns: {product_id: {"qty": float, "value": float}}
     """
     domain = [

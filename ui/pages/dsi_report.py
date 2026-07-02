@@ -4,13 +4,19 @@ import streamlit as st
 import pandas as pd
 from datetime import date, timedelta
 
-from logic.dsi_service import compute_dsi_report, classify_dsi
+from logic.dsi_service import compute_dsi_report
 
 
 def render_dsi_report_page():
     """Render DSI Report page content"""
     st.title("📋 DSI Report")
     st.markdown("### Days Sales of Inventory Report")
+
+    st.warning(
+        "⚠️ **Keterbatasan data:** DSI dihitung dari data stok saat ini. "
+        "Untuk produk dengan pergerakan cepat, akurasi mungkin terpengaruh. "
+        "Hasil adalah estimasi, bukan angka pasti."
+    )
 
     # --- Form Section ---
     with st.form("dsi_form"):
@@ -26,10 +32,7 @@ def render_dsi_report_page():
             )
 
         with col2:
-            brand_input = st.text_input(
-                "🏷️ Brand Filter (comma-separated, optional)",
-                placeholder="e.g. Paragon, Wardah, Make Over",
-            )
+            st.info("🏷️ Brand filter akan ditambahkan setelah field brand tersedia di Odoo.")
 
         submitted = st.form_submit_button(
             "🔍 Generate DSI Report",
@@ -44,9 +47,7 @@ def render_dsi_report_page():
             return
 
         date_from, date_to = date_range
-        brand_filter = None
-        if brand_input.strip():
-            brand_filter = [b.strip() for b in brand_input.split(",") if b.strip()]
+        assert isinstance(date_from, date) and isinstance(date_to, date)
 
         with st.spinner("Menghitung DSI..."):
             try:
@@ -54,16 +55,11 @@ def render_dsi_report_page():
                     date_from=date_from,
                     date_to=date_to,
                 )
-                # Apply brand filter client-side since brand is a placeholder
-                if brand_filter and "brand" in df.columns:
-                    mask = df["brand"].str.lower().isin([b.lower() for b in brand_filter])
-                    df = df[mask]
 
                 st.session_state.dsi_results = df
                 st.session_state.dsi_params = {
                     "date_from": date_from,
                     "date_to": date_to,
-                    "brand_filter": brand_filter,
                 }
                 st.rerun()
             except Exception as e:
@@ -75,7 +71,7 @@ def render_dsi_report_page():
         params = st.session_state.get("dsi_params", {})
 
         if df.empty:
-            st.warning("⚠️ Tidak ada data ditemukan untuk filter yang dipilih.")
+            st.warning("⚠️ Tidak ada data ditemukan.")
             return
 
         # Summary metrics
@@ -86,7 +82,7 @@ def render_dsi_report_page():
         classification_order = {
             "Very Fast": "🟢",
             "Fast": "🔵",
-            "Normal": "⟡",
+            "Normal": "🟡",
             "Slow": "🟠",
             "Dead": "🔴",
         }
@@ -95,12 +91,10 @@ def render_dsi_report_page():
         st.metric("Total Products", total)
 
         display_cols = st.columns(5)
-        col_idx = 0
-        for label, icon in classification_order.items():
+        for col_idx, (label, icon) in enumerate(classification_order.items()):
             count = len(df[df["classification"] == label])
             with display_cols[col_idx]:
                 st.metric(f"{icon} {label}", f"{count} ({count/total*100:.0f}%)")
-            col_idx += 1
 
         # Classification distribution chart
         st.markdown("---")
