@@ -6,46 +6,124 @@ from datetime import date
 from typing import Any, Dict, List
 
 from odoo.connection import OdooIntegrationError, connection_manager
-from logic.price_update_service import PriceUpdateService
 
 
 class CostUpdateService:
     """Analyze vendor bills and update standard_price (cost) on product.product."""
 
+    TAX_MULTIPLIERS = {
+        "PPN Termasuk": 1.0,
+        "PPN Blm Termasuk": 1.11,
+        "Non PKP": 1.0,
+        "PPN Dikecualikan": 1.0,
+    }
+
     def __init__(self):
         self.conn = connection_manager
-        self._price_svc = PriceUpdateService()
 
-    # ── Reuse bill listing from PriceUpdateService ─────────────────────────
+    # ── Bill listing ─────────────────────────────────────────────────────
 
     def get_recent_bills(self) -> List[Dict[str, Any]]:
-        return self._price_svc.get_recent_bills()
-
-    def get_bills_by_date(self, target_date: date) -> List[Dict[str, Any]]:
-        return self._price_svc.get_bills_by_date(target_date)
+        try:
+            return self.conn.search_read(
+                model_name="account.move",
+                domain=[("move_type", "=", "in_invoice"), ("state", "=", "posted")],
+                fields=["id", "name", "ref", "invoice_date", "partner_id"],
+                order="invoice_date desc",
+                limit=20,
+            )
+        except Exception as exc:
+            raise OdooIntegrationError("Failed to fetch recent bills.") from exc
 
     def get_bills_by_date_range(self, date_from: date, date_to: date) -> List[Dict[str, Any]]:
-        return self._price_svc.get_bills_by_date_range(date_from, date_to)
+        try:
+            return self.conn.search_read(
+                model_name="account.move",
+                domain=[
+                    ("move_type", "=", "in_invoice"),
+                    ("state", "=", "posted"),
+                    ("invoice_date", ">=", date_from.isoformat()),
+                    ("invoice_date", "<=", date_to.isoformat()),
+                ],
+                fields=["id", "name", "ref", "invoice_date", "partner_id"],
+                order="invoice_date desc",
+            )
+        except Exception as exc:
+            raise OdooIntegrationError("Failed to fetch bills by date range.") from exc
 
-    # ── Cost-specific analysis ────────────────────────────────────────────
+    # ── Tax multiplier ───────────────────────────────────────────────────
+
+    def _get_tax_multiplier(self, tax_ids: List) -> float:
+        """Determine tax multiplier from tax_ids list (id or [id, name] tuples)."""
+        if not tax_ids:
+            return 1.0
+        for tax in tax_ids:
+            if isinstance(tax, (list, tuple)) and len(tax) >= 2:
+                name = str(tax[1])
+                for key, mult in self.TAX_MULTIPLIERS.items():
+                    if key in name:
+                        return mult
+            elif isinstance(tax, int):
+                try:
+                    taxes = self.conn.search_read(
+                        "account.tax", domain=[("id", "=", tax)], fields=["id", "name"]
+                    )
+                    for t in taxes:
+                        name = str(t.get("name", ""))
+                        for key, mult in self.TAX_MULTIPLIERS.items():
+                            if key in name:
+                                return mult
+                except Exception:
+                    pass
+        return 1.0
+
+    # ── Core analysis ────────────────────────────────────────────────────
 
     def analyze_bill_for_cost(self, bill_id: int) -> List[Dict[str, Any]]:
         """Analyze vendor bill for cost updates.
 
-        Takes invoice lines, applies discount (negative price_unit lines)
-        distributed evenly per-unit across positive lines, then applies
-        tax multiplier to get modal_baru. Returns each product with its
-        current standard_price from Odoo.
-
-        Returns rows where |modal_baru - standard_price_lama| > 500.
+        Steps:
+          1. Fetch all invoice lines (product_id != False)
+          2. Positive lines: price_unit > 0
+             Discount lines: price_unit < 0 (skip 0)
+          3. subtotal = sum(unit_price × qty) for positive lines
+          4. discount_pct = abs(sum(unit_price × qty) for discount lines) / subtotal
+          5. For each product:
+             real_unit_price = unit_price × (1 - discount_pct) × tax_multiplier
+          6. Fetch current standard_price from product.product
+          7. Filter |real_unit_price - standard_price_lama| > 500
         """
-        lines = self._price_svc.get_bill_lines(bill_id)
-        positive = lines["positive"]
-        negative = lines["negative"]
+        try:
+            lines = self.conn.search_read(
+                model_name="account.move.line",
+                domain=[("move_id", "=", bill_id), ("product_id", "!=", False)],
+                fields=["product_id", "price_unit", "quantity", "tax_ids",
+                        "price_subtotal", "name"],
+            )
+        except Exception as exc:
+            raise OdooIntegrationError("Failed to fetch bill lines.") from exc
+
+        positive = [l for l in lines if float(l.get("price_unit", 0)) > 0]
+        discount_lines = [l for l in lines if float(l.get("price_unit", 0)) < 0]
+
         if not positive:
             return []
 
-        discount_per_unit = self._price_svc.compute_discount_per_unit(negative, positive)
+        # Step 3: subtotal = sum(unit_price × qty) for positive lines
+        subtotal = sum(
+            float(l.get("price_unit", 0)) * float(l.get("quantity", 1))
+            for l in positive
+        )
+
+        # Step 4: discount_pct
+        if subtotal == 0:
+            return []
+
+        discount_total = sum(
+            abs(float(l.get("price_unit", 0)) * float(l.get("quantity", 1)))
+            for l in discount_lines
+        )
+        discount_pct = discount_total / subtotal
 
         # Collect variant IDs
         variant_ids: List[int] = []
@@ -60,7 +138,7 @@ class CostUpdateService:
         if not variant_ids:
             return []
 
-        # Fetch product.product for barcode + template_id
+        # Fetch product variants (barcode, template_id, current standard_price)
         try:
             variants = self.conn.search_read(
                 "product.product",
@@ -72,6 +150,7 @@ class CostUpdateService:
 
         pid_info: Dict[int, Dict[str, Any]] = {}
         std_price_map: Dict[int, float] = {}
+        template_ids: set = set()
         for v in variants:
             tmpl = v.get("product_tmpl_id") or []
             tmpl_id = tmpl[0] if isinstance(tmpl, (list, tuple)) and tmpl else None
@@ -81,18 +160,16 @@ class CostUpdateService:
             }
             sp = v.get("standard_price")
             std_price_map[v["id"]] = float(sp) if sp else 0.0
+            if tmpl_id:
+                template_ids.add(tmpl_id)
 
-        # Fetch template for name + list_price
-        template_ids = list(set(
-            info["template_id"] for info in pid_info.values()
-            if info["template_id"] and info["barcode"]
-        ))
+        # Fetch templates for name + list_price
         tmpl_map: Dict[int, Dict[str, Any]] = {}
         if template_ids:
             try:
                 tmpl_data = self.conn.search_read(
                     "product.template",
-                    domain=[("id", "in", template_ids)],
+                    domain=[("id", "in", list(template_ids))],
                     fields=["id", "name", "list_price"],
                 )
                 for t in tmpl_data:
@@ -100,7 +177,7 @@ class CostUpdateService:
             except Exception as exc:
                 raise OdooIntegrationError("Failed to fetch product templates.") from exc
 
-        # Compute per line
+        # Step 5: compute real_unit_price per product
         rows = []
         for vid in variant_ids:
             info = pid_info.get(vid)
@@ -117,15 +194,14 @@ class CostUpdateService:
             tmpl = tmpl_map[tid]
 
             price_unit = float(line.get("price_unit", 0))
-            effective_price = price_unit - discount_per_unit
-            if effective_price < 0:
-                effective_price = 0
-
             tax_ids = line.get("tax_ids", [])
-            modal_baru = round(effective_price * self._price_svc.get_tax_multiplier(tax_ids))
+            tax_mult = self._get_tax_multiplier(tax_ids)
+
+            # real_unit_price = unit_price × (1 - discount_pct) × tax_multiplier
+            real_unit_price = round(price_unit * (1 - discount_pct) * tax_mult)
 
             std_price_lama = std_price_map.get(vid, 0.0)
-            cost_diff = modal_baru - std_price_lama
+            cost_diff = real_unit_price - std_price_lama
 
             if abs(cost_diff) <= 500:
                 continue
@@ -136,42 +212,30 @@ class CostUpdateService:
                 "barcode": barcode,
                 "name": str(tmpl.get("name") or line.get("name") or "").strip(),
                 "list_price": float(tmpl.get("list_price") or 0),
-                "modal_baru": modal_baru,
+                "modal_baru": real_unit_price,
                 "standard_price_lama": std_price_lama,
-                "standard_price_baru": modal_baru,
+                "standard_price_baru": real_unit_price,
                 "cost_diff": cost_diff,
             })
 
         return rows
 
-    # ── Write Operations ──────────────────────────────────────────────────
+    # ── Write Operations ─────────────────────────────────────────────────
 
     def update_product_cost(self, variant_id: int, standard_price: float) -> bool:
-        """Update standard_price on product.product. Returns True on success."""
         try:
-            result = self.conn.write(
+            return bool(self.conn.write(
                 model_name="product.product",
                 ids=[variant_id],
                 values={"standard_price": standard_price},
-            )
-            return bool(result)
-        except OdooIntegrationError:
-            raise
+            ))
         except Exception as exc:
             raise OdooIntegrationError(f"Failed to update standard_price for product {variant_id}.") from exc
 
     def update_selected(
-        self,
-        rows: List[Dict[str, Any]],
-        selected_indices: List[int],
+        self, rows: List[Dict[str, Any]], selected_indices: List[int]
     ) -> Dict[str, Any]:
-        """Update multiple selected products' standard_price to Odoo.
-
-        Returns:
-            {"success": int, "failed": int, "errors": [(barcode, msg), ...]}
-        """
         result: Dict[str, Any] = {"success": 0, "failed": 0, "errors": []}
-
         for idx in selected_indices:
             row = rows[idx]
             try:
@@ -181,5 +245,4 @@ class CostUpdateService:
             except OdooIntegrationError as e:
                 result["failed"] += 1
                 result["errors"].append((row["barcode"], str(e)))
-
         return result
