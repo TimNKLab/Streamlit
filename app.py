@@ -26,6 +26,7 @@ from ui.pages.price_tag_generator import render_price_tag_page
 from ui.pages.price_sync import render_price_sync_page
 from ui.pages.internal_moves import render_internal_moves_page
 from ui.pages.update_price import render_update_price_page
+from ui.pages.update_cost import render_update_cost_page
 from utils.persistence import save_active_tab, restore_active_tab, has_saved_barcodes
 
 # Configure page
@@ -75,18 +76,23 @@ def main():
         "price_tag": ("Cetak Price Tag", render_price_tag_page),
         "internal_moves": ("Internal Moves", render_internal_moves_page),
         "update_harga": ("Cek Kenaikan Modal", render_update_price_page),
+        "update_cost": ("Update Cost", render_update_cost_page),
     }
     
-    # Render tab buttons
-    tab_cols = st.columns(len(tabs))
-    for idx, (tab_key, (tab_label, _)) in enumerate(tabs.items()):
-        with tab_cols[idx]:
-            is_active = st.session_state.active_tab == tab_key
-            btn_type = "primary" if is_active else "secondary"
-            if st.button(tab_label, key=f"tab_{tab_key}", type=btn_type, use_container_width=True):
-                st.session_state.active_tab = tab_key
-                save_active_tab(tab_key)
-                st.rerun()
+    # Render tab buttons (2 rows to keep labels readable)
+    tab_list = list(tabs.items())
+    row_size = 5
+    for row_start in range(0, len(tab_list), row_size):
+        row_items = tab_list[row_start:row_start + row_size]
+        tab_cols = st.columns(len(row_items))
+        for col, (tab_key, (tab_label, _)) in zip(tab_cols, row_items):
+            with col:
+                is_active = st.session_state.active_tab == tab_key
+                btn_type = "primary" if is_active else "secondary"
+                if st.button(tab_label, key=f"tab_{tab_key}", type=btn_type, use_container_width=True):
+                    st.session_state.active_tab = tab_key
+                    save_active_tab(tab_key)
+                    st.rerun()
     
     st.markdown("---")
     

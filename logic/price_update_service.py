@@ -100,15 +100,29 @@ class PriceUpdateService:
         except Exception as exc:
             raise OdooIntegrationError("Failed to fetch bills by date.") from exc
 
+    def get_bills_by_date_range(self, date_from: date, date_to: date) -> List[Dict[str, Any]]:
+        """Return all posted vendor bills within a date range."""
+        try:
+            return self.conn.search_read(
+                model_name="account.move",
+                domain=[
+                    ("move_type", "=", "in_invoice"),
+                    ("state", "=", "posted"),
+                    ("invoice_date", ">=", date_from.isoformat()),
+                    ("invoice_date", "<=", date_to.isoformat()),
+                ],
+                fields=["id", "name", "ref", "invoice_date", "partner_id"],
+                order="invoice_date desc",
+            )
+        except OdooIntegrationError:
+            raise
+        except Exception as exc:
+            raise OdooIntegrationError("Failed to fetch bills by date range.") from exc
+
     def get_bill_lines(self, bill_id: int) -> Dict[str, Any]:
         """Get invoice lines for a bill, split into positive (products) and negative (discounts).
 
-        Returns:
-            {
-                "positive": [{"product_id": [id, name], "price_unit": float, "quantity": float,
-                              "tax_ids": [[id, name]], "price_subtotal": float, "name": str}, ...],
-                "negative": [same fields with price_subtotal < 0, ...],
-            }
+        Positive = price_unit > 0. Negative = price_unit < 0 (discount lines).
         """
         try:
             lines = self.conn.search_read(
@@ -122,10 +136,32 @@ class PriceUpdateService:
         except Exception as exc:
             raise OdooIntegrationError("Failed to fetch bill lines.") from exc
 
-        positive = [l for l in lines if l.get("price_subtotal", 0) > 0]
-        negative = [l for l in lines if l.get("price_subtotal", 0) < 0]
+        positive = [l for l in lines if float(l.get("price_unit", 0)) > 0]
+        negative = [l for l in lines if float(l.get("price_unit", 0)) < 0]
 
         return {"positive": positive, "negative": negative}
+
+    def compute_discount_per_unit(
+        self, negative: List[Dict[str, Any]], positive: List[Dict[str, Any]]
+    ) -> float:
+        """Compute per-unit discount from negative lines.
+
+        Total discount = sum of |price_unit × quantity| for negative lines.
+        Divided by sum of quantity across ALL positive lines.
+        Result is subtracted from each positive line's price_unit before tax.
+        """
+        if not negative or not positive:
+            return 0.0
+
+        total_discount = sum(
+            abs(float(l.get("price_unit", 0)) * float(l.get("quantity", 1)))
+            for l in negative
+        )
+        total_qty = sum(float(l.get("quantity", 1)) for l in positive)
+        if total_qty <= 0:
+            return 0.0
+
+        return total_discount / total_qty
 
     # ── Discount, Tax, Margin, Promo Logic ──────────────────────────────
 
@@ -237,6 +273,9 @@ class PriceUpdateService:
 
         if not variant_ids:
             return []
+
+        # Discount from negative lines: total / sum_qty_positive
+        discount_per_unit = self.compute_discount_per_unit(negative, positive)
 
         # ── 2. Batch: product.product -> barcode + template_id ───────────
         try:
@@ -443,8 +482,14 @@ class PriceUpdateService:
 
             price_unit = float(line.get("price_unit", 0))
             tax_ids = line.get("tax_ids", [])
+
+            # Apply discount before tax: price_unit -= discount_per_unit
+            effective_price = price_unit - discount_per_unit
+            if effective_price < 0:
+                effective_price = 0  # floor
+
             modal_baru = self.compute_modal(
-                price_unit, self.get_tax_multiplier(tax_ids)
+                effective_price, self.get_tax_multiplier(tax_ids)
             )
 
             prev = prev_map.get(vid)
