@@ -82,6 +82,27 @@ class PriceUpdateService:
         except Exception as exc:
             raise OdooIntegrationError("Failed to fetch recent bills.") from exc
 
+    def get_bill_by_number(self, bill_number: str) -> Optional[Dict[str, Any]]:
+        """Find a posted vendor bill by name or ref."""
+        bill_number = (bill_number or "").strip()
+        if not bill_number:
+            return None
+        try:
+            bills = self.conn.search_read(
+                "account.move",
+                domain=[
+                    ("move_type", "=", "in_invoice"),
+                    "|",
+                    ("name", "=", bill_number),
+                    ("ref", "=", bill_number),
+                ],
+                fields=["id", "name", "ref", "invoice_date", "partner_id"],
+                limit=1,
+            )
+            return bills[0] if bills else None
+        except Exception:
+            return None
+
     def get_bills_by_date(self, target_date: date) -> List[Dict[str, Any]]:
         """Return all posted vendor bills for a given date."""
         try:
@@ -129,7 +150,7 @@ class PriceUpdateService:
                 model_name="account.move.line",
                 domain=[("move_id", "=", bill_id), ("product_id", "!=", False)],
                 fields=["product_id", "price_unit", "quantity", "tax_ids",
-                        "price_subtotal", "name"],
+                        "price_subtotal", "name", "discount"],
             )
         except OdooIntegrationError:
             raise
@@ -440,7 +461,7 @@ class PriceUpdateService:
                     ("price_unit", ">", 0),
                 ],
                 fields=["product_id", "price_unit", "quantity", "tax_ids",
-                        "price_subtotal", "move_id"],
+                        "price_subtotal", "move_id", "discount"],
                 order="id desc",
             )
         except Exception as exc:
@@ -481,10 +502,12 @@ class PriceUpdateService:
             pricelist_rules = self._extract_pricelist_rules(pl_map.get(tid, []))
 
             price_unit = float(line.get("price_unit", 0))
+            discount_pct = float(line.get("discount", 0) or 0) / 100
             tax_ids = line.get("tax_ids", [])
 
-            # Apply discount before tax: price_unit -= discount_per_unit
-            effective_price = price_unit - discount_per_unit
+            # Apply line discount first, then negative-line global discount, then tax
+            price_after_line_discount = price_unit * (1 - discount_pct)
+            effective_price = price_after_line_discount - discount_per_unit
             if effective_price < 0:
                 effective_price = 0  # floor
 
@@ -495,8 +518,11 @@ class PriceUpdateService:
             prev = prev_map.get(vid)
             modal_lama = None
             if prev:
+                prev_price_unit = float(prev.get("price_unit", 0))
+                prev_discount_pct = float(prev.get("discount", 0) or 0) / 100
+                prev_effective = prev_price_unit * (1 - prev_discount_pct)
                 modal_lama = self.compute_modal(
-                    float(prev.get("price_unit", 0)),
+                    prev_effective,
                     self.get_tax_multiplier(prev.get("tax_ids", [])),
                 )
 

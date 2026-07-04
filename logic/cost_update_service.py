@@ -98,7 +98,7 @@ class CostUpdateService:
                 model_name="account.move.line",
                 domain=[("move_id", "=", bill_id), ("product_id", "!=", False)],
                 fields=["product_id", "price_unit", "quantity", "tax_ids",
-                        "price_subtotal", "name"],
+                        "price_subtotal", "name", "discount"],
             )
         except Exception as exc:
             raise OdooIntegrationError("Failed to fetch bill lines.") from exc
@@ -194,11 +194,13 @@ class CostUpdateService:
             tmpl = tmpl_map[tid]
 
             price_unit = float(line.get("price_unit", 0))
+            discount_pct_line = float(line.get("discount", 0) or 0) / 100
             tax_ids = line.get("tax_ids", [])
             tax_mult = self._get_tax_multiplier(tax_ids)
 
-            # real_unit_price = unit_price × (1 - discount_pct) × tax_multiplier
-            real_unit_price = round(price_unit * (1 - discount_pct) * tax_mult)
+            # Apply per-line discount, then global discount, then tax
+            price_after_line_discount = price_unit * (1 - discount_pct_line)
+            real_unit_price = round(price_after_line_discount * (1 - discount_pct) * tax_mult)
 
             std_price_lama = std_price_map.get(vid, 0.0)
             cost_diff = real_unit_price - std_price_lama

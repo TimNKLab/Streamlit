@@ -360,6 +360,27 @@ def render_update_price_page() -> None:
     date_mode = False
 
     if mode == "Pilih Vendor Bill":
+        # Search by bill number
+        search_number = st.text_input("🔎 Cari No. Faktur", placeholder="Contoh: NK/POL/...", key="bill_search_input")
+        search_clicked = False
+        if search_number:
+            search_clicked = st.button("🔍 Cari", type="primary", use_container_width=True, key="search_bill_btn")
+
+        if search_clicked and search_number:
+            with st.spinner(f"Mencari faktur {search_number}..."):
+                found = service.get_bill_by_number(search_number)
+            if found:
+                st.session_state.search_found_bill = found
+                st.session_state.search_just_found = True
+                st.success(f"✅ Ditemukan: {found.get('name')} ({str(found.get('invoice_date',''))[:10]})")
+            else:
+                st.warning(f"Faktur '{search_number}' tidak ditemukan.")
+                st.session_state.search_found_bill = None
+                st.session_state.search_just_found = False
+
+        st.markdown("— atau —")
+        st.markdown("**Pilih dari faktur terbaru:**")
+
         if "recent_bills" not in st.session_state:
             with st.spinner("Memuat daftar faktur terbaru..."):
                 try:
@@ -395,9 +416,19 @@ def render_update_price_page() -> None:
             st.markdown("###")
             load_clicked = st.button("🔍 Load", type="primary", use_container_width=True)
 
-        if load_clicked:
+        # Prefer search-found bill over dropdown
+        search_found = st.session_state.get("search_found_bill")
+        if search_found:
+            bill_id = int(search_found["id"])
+            partner = search_found.get("partner_id")
+            partner_name = partner[1] if isinstance(partner, (list, tuple)) and len(partner) >= 2 else ""
+            bill_label = f"{search_found.get('name')} | {str(search_found.get('invoice_date',''))[:10]} | {partner_name}"
+        elif load_clicked:
             bill_id = bill_options[sel_label]
             bill_label = sel_label
+        else:
+            bill_id = None
+            bill_label = ""
 
     else:  # Pilih Tanggal
         date_mode = True
@@ -408,8 +439,11 @@ def render_update_price_page() -> None:
             st.markdown("###")
             load_clicked = st.button("🔍 Load Bills", type="primary", use_container_width=True)
 
+    # Auto-load when bill was just found via search
+    search_just_found = st.session_state.pop("search_just_found", False)
+
     # ── Step 2: Load & analyze ─────────────────────────────────────────
-    if load_clicked:
+    if load_clicked or search_just_found:
         if not date_mode:
             # Single bill
             with st.spinner("Menganalisis faktur..."):
