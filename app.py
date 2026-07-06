@@ -27,6 +27,7 @@ from ui.pages.price_sync import render_price_sync_page
 from ui.pages.internal_moves import render_internal_moves_page
 from ui.pages.update_price import render_update_price_page
 from ui.pages.update_cost import render_update_cost_page
+from ui.pages.bulk_price_update import render_bulk_price_update_page
 from utils.persistence import save_active_tab, restore_active_tab, has_saved_barcodes
 
 # Configure page
@@ -77,6 +78,7 @@ def main():
         "internal_moves": ("Internal Moves", render_internal_moves_page),
         "update_harga": ("Cek Kenaikan Modal", render_update_price_page),
         "update_cost": ("Update Cost", render_update_cost_page),
+        "bulk_price": ("Update Harga Masal", render_bulk_price_update_page),
     }
     
     # Render tab buttons (2 rows to keep labels readable)

@@ -78,12 +78,91 @@ def format_utc_to_wib(date_str):
         return date_str
 
 
+def _render_price_update_reminders() -> None:
+    """Show banner + full schedule listing for due/upcoming price updates."""
+    from logic.schedule_storage import ScheduleStorage
+    from logic.bulk_price_update_service import BulkPriceUpdateService
+    storage = ScheduleStorage()
+    schedules = storage.list_all()
+    if not schedules:
+        return
+
+    due_rows = []
+    upcoming_rows = []
+    today = datetime.now(WIB).date()
+
+    for s in schedules:
+        for r in s.get("rows", []):
+            tgl = r.get("tanggal_update", "")
+            if not tgl:
+                continue
+            try:
+                dt = datetime.strptime(tgl[:10], "%Y-%m-%d").date()
+            except (ValueError, TypeError):
+                continue
+            entry = {"barcode": r.get("barcode", ""), "name": r.get("name", ""),
+                     "tanggal": dt.strftime("%d/%m/%Y")}
+            if dt <= today:
+                due_rows.append(entry)
+            elif dt <= today + timedelta(days=3):
+                upcoming_rows.append(entry)
+
+    if due_rows:
+        barcodes = ", ".join(f"**{r['barcode']}**" for r in due_rows[:5])
+        more = f" +{len(due_rows)-5} lagi" if len(due_rows) > 5 else ""
+        st.error(
+            f"🔴 **{len(due_rows)} produk perlu dinaikkan harganya!** "
+            f"{barcodes}{more} — "
+            f"buka **Update Harga Masal → 📅 Update Terjadwal** untuk eksekusi.",
+            icon="🚨",
+        )
+    if upcoming_rows:
+        barcodes = ", ".join(f"**{upcoming_rows[0]['barcode']}**" for r in upcoming_rows[:3])
+        more = f" +{len(upcoming_rows)-3} lagi" if len(upcoming_rows) > 3 else ""
+        st.warning(
+            f"⏰ **{len(upcoming_rows)} produk akan naik dalam 3 hari ke depan.** "
+            f"{barcodes}{more}",
+            icon="📅",
+        )
+
+    # ── Full schedule listing (same as bulk_price_update) ──────────────
+    st.markdown("---")
+    st.subheader("📅 Update Terjadwal")
+    service = BulkPriceUpdateService()
+    for s in schedules:
+        due_label = "🔴 **Jatuh tempo!**" if s["is_due"] else "⏳ Menunggu"
+        s_total = s["total_rows"]
+        with st.expander(f"{s['label']} — {s_total} produk — {due_label}", expanded=s["is_due"]):
+            st.caption(f"Dibuat: {s['created_at'][:19]}")
+            for r in s.get("rows", []):
+                tgl_display = r.get("tanggal_update", "")[:10] if r.get("tanggal_update") else "-"
+                fp = f"Rp {r['fixed_price']:,.0f}" if r.get("fixed_price") else "-"
+                st.text(f"  {r['barcode']} — {r['name']}: Rp {r['sales_price']:,.0f} | Fixed: {fp} | Tgl: {tgl_display}")
+            col1, col2 = st.columns(2)
+            with col1:
+                if s["is_due"]:
+                    if st.button(f"▶️ Jalankan {s['label']}", key=f"dash_run_{s['id']}", use_container_width=True):
+                        with st.spinner(f"Menjalankan {s['label']}..."):
+                            result = service.execute_scheduled_file(s["id"])
+                        if result["success"]:
+                            st.success(f"✅ {result['success']} produk berhasil!")
+                        if result.get("errors"):
+                            for bc, err in result["errors"]:
+                                st.error(f"{bc}: {err}")
+                        st.rerun()
+            with col2:
+                if st.button(f"🗑️ Hapus", key=f"dash_del_{s['id']}", use_container_width=True):
+                    service.remove_scheduled_file(s["id"])
+                    st.rerun()
 def render_dashboard_page():
     """Render dashboard page content backed by live Odoo data."""
 
     st.title("Dashboard")
     st.markdown("### NK Dashboard v1.0.0")
     st.caption("Terima kasih New Khatulistiwa! 🙋🏻‍♂️")
+
+    # ── Reminder: scheduled price updates that are due ──────────────────
+    _render_price_update_reminders()
 
     now = datetime.now(WIB).replace(microsecond=0)
     default_start_dt = (now - timedelta(days=1))
