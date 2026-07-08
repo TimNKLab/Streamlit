@@ -446,7 +446,7 @@ def get_internal_moves_summary_by_day(*, target_date: date) -> List[InternalMove
         limit=None,
     )
 
-    # Group by picking_id first (each picking = one reference)
+    # Group by partner_id -> picks
     picking_groups: Dict[int, dict] = {}
     for r in rows:
         picking = r.get("picking_id")
@@ -462,24 +462,27 @@ def get_internal_moves_summary_by_day(*, target_date: date) -> List[InternalMove
         if pick_id in picking_groups:
             picking_groups[pick_id]["qty"] += qty
 
-    # Then aggregate to partners
-    partner_groups: Dict[int, dict] = {}
+    # Aggregate to partner name (case-insensitive merge)
+    partner_groups: Dict[str, tuple[int, dict]] = {}
     for pick_info in picking_groups.values():
-        pid = pick_info["partner_id"]
-        if pid not in partner_groups:
-            partner_groups[pid] = {"name": pick_info["partner_name"], "count": 0, "qty": 0.0}
-        partner_groups[pid]["count"] += 1
-        partner_groups[pid]["qty"] += pick_info["qty"]
+        key = pick_info["partner_name"].lower().strip()
+        if not key:
+            key = f"__id_{pick_info['partner_id']}"
+        if key not in partner_groups:
+            partner_groups[key] = (pick_info["partner_id"], {"name": pick_info["partner_name"], "count": 0, "qty": 0.0})
+        partner_groups[key][1]["count"] += 1
+        partner_groups[key][1]["qty"] += pick_info["qty"]
 
     result = [
         InternalMoveSummary(
-            partner_id=pid,
+            partner_id=partner_id,
             partner_name=info["name"],
             record_count=info["count"],
             total_product_qty=info["qty"],
         )
-        for pid, info in partner_groups.items()
+        for partner_id, info in (v for v in partner_groups.values())
     ]
+
 
     result.sort(key=lambda s: s.partner_name.lower())
     return result
