@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 import streamlit as st
 import pandas as pd
+from st_aggrid import AgGrid, GridOptionsBuilder, JsCode
 
 from odoo.connection import OdooIntegrationError
 from odoo.services import SalesMetrics, check_odoo_health, get_sales_metrics
@@ -183,7 +184,11 @@ def render_dashboard_page():
             }
             for s in summaries
         ])
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        df = df.sort_values("Jumlah Record", ascending=False)
+        gb = GridOptionsBuilder.from_dataframe(df)
+        gb.configure_default_column(sortable=True, filter=True)
+        gb.configure_grid_options(sortModel=[{"colId": "Jumlah Record", "sort": "desc"}])
+        AgGrid(df, gridOptions=gb.build(), use_container_width=True, hide_index=True)
     else:
         st.info("Belum ada internal moves hari ini.")
 

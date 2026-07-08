@@ -441,7 +441,7 @@ def get_internal_moves_summary_by_day(*, target_date: date) -> List[InternalMove
             ("date", ">=", f"{target_str} 00:00:00"),
             ("date", "<=", f"{target_str} 23:59:59"),
         ],
-        fields=["partner_id", "product_qty"],
+        fields=["partner_id", "quantity"],
         order="partner_id asc",
         limit=None,
     )
@@ -454,7 +454,7 @@ def get_internal_moves_summary_by_day(*, target_date: date) -> List[InternalMove
             continue
         pid = int(partner[0])
         pname = str(partner[1] or "")
-        qty = float(r.get("product_qty") or 0)
+        qty = float(r.get("quantity") or 0)
 
         if pid not in groups:
             groups[pid] = {"name": pname, "count": 0, "qty": 0.0}
