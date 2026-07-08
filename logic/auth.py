@@ -1,10 +1,11 @@
 """Authentication logic module"""
+import os
 
 class AuthManager:
     """Handles authentication logic"""
-    
-    def __init__(self, password="admin123"):
-        self.password = password
+
+    def __init__(self, password=None):
+        self.password = password or os.environ.get("APP_PASSWORD", "")
     
     def verify_password(self, input_password):
         """Verify if the input password matches the stored password"""
