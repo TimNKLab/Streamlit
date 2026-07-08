@@ -535,10 +535,12 @@ class PriceUpdateService:
             has_promo = vid in promo_map
             promo_period_str = "-"
             promo_price = None
+            promo_date_to = None
             promo = promo_map.get(vid)
             if promo:
                 ds = str(promo.get("date_from", ""))[:10] if promo.get("date_from") else ""
                 de = str(promo.get("date_to", ""))[:10] if promo.get("date_to") else ""
+                promo_date_to = de if de else None
                 promo_period_str = f"{ds} s.d {de}" if ds and de else (f"mulai {ds}" if ds else "-")
 
             rows.append({
@@ -554,6 +556,7 @@ class PriceUpdateService:
                 "margin_diff_amount": margins["margin_diff_amount"],
                 "has_promo": has_promo,
                 "promo_period_str": promo_period_str,
+                "promo_date_to": promo_date_to,
                 "promo_price": promo_price,
                 "pricelist_rules": pricelist_rules,
                 "sales_price_baru": list_price,

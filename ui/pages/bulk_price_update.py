@@ -226,6 +226,27 @@ def _render_results(service: BulkPriceUpdateService) -> None:
                             st.warning(f"{bc}: {warn}")
                     if result["skipped"] > 0:
                         st.info(f"⏭️ {result['skipped']} baris dilewati.")
+                    # ── Auto-schedule promo products ───────────────────
+                    promo_rows = [r for r in validated if r["has_active_promo"] and r["template_id"]]
+                    if promo_rows:
+                        from datetime import timedelta
+                        from logic.schedule_storage import ScheduleStorage
+                        sched_rows = []
+                        for r in promo_rows:
+                            tgl_r = r.get("tanggal_update", "")
+                            if tgl_r and tgl_r > date.today().isoformat():
+                                sched_rows.append({
+                                    "barcode": r["barcode"],
+                                    "name": r["name"],
+                                    "sales_price": r["sales_price"],
+                                    "fixed_price": r.get("fixed_price"),
+                                    "tanggal_update": tgl_r,
+                                    "template_id": r["template_id"],
+                                    "has_fixed_price": r.get("has_fixed_price", False),
+                                })
+                        if sched_rows:
+                            ScheduleStorage().save(sched_rows, label=f"Promo massal — {date.today().isoformat()}")
+                            st.info(f"📅 {len(sched_rows)} produk promo dijadwalkan naik otomatis.")
                     st.session_state.bulk_validated = validated
                 except Exception as e:
                     st.error(f"Gagal: {e}")

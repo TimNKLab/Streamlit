@@ -331,6 +331,37 @@ def _render_analysis(service: PriceUpdateService, raw_rows: List[Dict[str, Any]]
                     if result["success"] > 0:
                         new_items = _build_update_harga_tag_items(raw_rows, selected_indices)
                         _accumulate_tag_items(new_items)
+
+                    # ── Auto-schedule promo products ───────────────────
+                    prows = [r for r in raw_rows if r.get("has_promo")]
+                    if prows:
+                        from datetime import timedelta
+                        from logic.schedule_storage import ScheduleStorage
+                        today = date.today()
+                        sched_rows = []
+                        for r in prows:
+                            try:
+                                end = datetime.strptime(str(r.get("promo_date_to", ""))[:10], "%Y-%m-%d").date() if r.get("promo_date_to") else None
+                                tgl = end + timedelta(days=1) if end else today + timedelta(days=1)
+                            except (ValueError, TypeError):
+                                tgl = today + timedelta(days=1)
+                            if tgl <= today:
+                                tgl = today + timedelta(days=1)
+                            sched_rows.append({
+                                "barcode": r["barcode"],
+                                "name": r["name"],
+                                "sales_price": float(r.get("sales_price_baru", r["list_price"])),
+                                "fixed_price": float(r.get("fixed_price_baru", 0)),
+                                "tanggal_update": tgl.isoformat(),
+                                "template_id": r["template_id"],
+                                "has_fixed_price": bool(r.get("fixed_price_baru", 0) or 0) > 0,
+                            })
+                        if sched_rows:
+                            ScheduleStorage().save(
+                                sched_rows,
+                                label=f"Promo sched — {st.session_state.get('selected_bill_label', 'bill')[:50]}"
+                            )
+                            st.info(f"📅 {len(sched_rows)} produk promo dijadwalkan naik otomatis.")
                 except Exception as e:
                     st.error(f"Gagal mengupdate: {e}")
     with col2:

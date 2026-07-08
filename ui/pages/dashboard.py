@@ -77,19 +77,33 @@ def _render_price_update_reminders() -> None:
             icon="📅",
         )
 
-    # ── Full schedule listing (same as bulk_price_update) ──────────────
+    # ── Full schedule listing with product table ─────────────────────
     st.markdown("---")
     st.subheader("📅 Update Terjadwal")
     service = BulkPriceUpdateService()
+
+    # Collect ALL schedule rows into one table
+    all_table_rows = []
+    for s in schedules:
+        for r in s.get("rows", []):
+            tgl_display = r.get("tanggal_update", "")[:10] if r.get("tanggal_update") else "-"
+            all_table_rows.append({
+                "Barcode": r.get("barcode", ""),
+                "Nama Produk": r.get("name", ""),
+                "Sales Price": f"Rp {r['sales_price']:,.0f}" if r.get("sales_price") else "-",
+                "Fixed Price": f"Rp {r['fixed_price']:,.0f}" if r.get("fixed_price") else "-",
+                "Tgl Update": tgl_display,
+            })
+
+    if all_table_rows:
+        st.dataframe(pd.DataFrame(all_table_rows), use_container_width=True, hide_index=True)
+
+    # Per-schedule expanders with controls
     for s in schedules:
         due_label = "🔴 **Jatuh tempo!**" if s["is_due"] else "⏳ Menunggu"
         s_total = s["total_rows"]
         with st.expander(f"{s['label']} — {s_total} produk — {due_label}", expanded=s["is_due"]):
             st.caption(f"Dibuat: {s['created_at'][:19]}")
-            for r in s.get("rows", []):
-                tgl_display = r.get("tanggal_update", "")[:10] if r.get("tanggal_update") else "-"
-                fp = f"Rp {r['fixed_price']:,.0f}" if r.get("fixed_price") else "-"
-                st.text(f"  {r['barcode']} — {r['name']}: Rp {r['sales_price']:,.0f} | Fixed: {fp} | Tgl: {tgl_display}")
             col1, col2 = st.columns(2)
             with col1:
                 if s["is_due"]:
