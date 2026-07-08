@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from typing import Any, Dict, List, Optional, Sequence
 
 from odoo.connection import connection_manager
@@ -47,6 +48,14 @@ class CandidateLocationQty:
 class ProductUom:
     product_id: int
     uom_id: int
+
+
+@dataclass(frozen=True)
+class InternalMoveSummary:
+    partner_id: int
+    partner_name: str
+    record_count: int
+    total_product_qty: float
 
 
 # ---------------------------------------------------------------------------
@@ -408,3 +417,58 @@ def get_internal_picking_type_id() -> Optional[int]:
         limit=1,
     )
     return int(rows[0]["id"]) if rows else None
+
+
+# ---------------------------------------------------------------------------
+# Internal Moves Summary
+# ---------------------------------------------------------------------------
+
+def get_internal_moves_summary_by_day(*, target_date: date) -> List[InternalMoveSummary]:
+    """Fetch stock moves for a given day where source is GDG and destination is STR/DISPLAY,
+    grouped by partner (contact).
+
+    Returns sorted list by partner name.
+    """
+    target_str = target_date.strftime("%Y-%m-%d")
+
+    rows = connection_manager.search_read(
+        model_name="stock.move",
+        domain=[
+            ("location_id.complete_name", "ilike", "GDG"),
+            "|",
+            ("location_dest_id.complete_name", "ilike", "STR"),
+            ("location_dest_id.complete_name", "ilike", "DISPLAY"),
+            ("date", "=", target_str),
+        ],
+        fields=["partner_id", "product_qty"],
+        order="partner_id asc",
+        limit=None,
+    )
+
+    # Group by partner_id
+    groups: Dict[int, dict] = {}
+    for r in rows:
+        partner = r.get("partner_id")
+        if not partner or not isinstance(partner, list) or len(partner) < 2:
+            continue
+        pid = int(partner[0])
+        pname = str(partner[1] or "")
+        qty = float(r.get("product_qty") or 0)
+
+        if pid not in groups:
+            groups[pid] = {"name": pname, "count": 0, "qty": 0.0}
+        groups[pid]["count"] += 1
+        groups[pid]["qty"] += qty
+
+    result = [
+        InternalMoveSummary(
+            partner_id=pid,
+            partner_name=info["name"],
+            record_count=info["count"],
+            total_product_qty=info["qty"],
+        )
+        for pid, info in groups.items()
+    ]
+
+    result.sort(key=lambda s: s.partner_name.lower())
+    return result
