@@ -144,6 +144,17 @@ def _render_results(service: BulkPriceUpdateService) -> None:
     c4.metric("⚠️ Promo", promo)
     c5.metric("✅ Dipilih", selected)
 
+    # ── Promo alert (prominent, not hidden) ───────────────────────────────
+    promo_rows = [r for r in validated if r["has_active_promo"]]
+    if promo_rows:
+        promo_names = ", ".join(r['name'] for r in promo_rows[:3])
+        more = f" dan {len(promo_rows)-3} lainnya" if len(promo_rows) > 3 else ""
+        st.warning(
+            f"⚠️ **{len(promo_rows)} produk sedang dalam promo aktif:** {promo_names}{more}. "
+            f"Mereka akan dijadwalkan update otomatis setelah promo berakhir.",
+            icon="⚠️"
+        )
+
     # ── Editable table with checkbox + Tanggal Update ───────────────────
     st.markdown("### 📋 Hasil Validasi")
 
@@ -169,103 +180,72 @@ def _render_results(service: BulkPriceUpdateService) -> None:
 
     df_display = pd.DataFrame(display_rows)
 
-    edited_df = st.data_editor(
-        df_display,
-        column_config={
-            "Pilih": st.column_config.CheckboxColumn("Pilih", default=True, width="small"),
-            "Status": st.column_config.TextColumn("Status", width="medium"),
-            "Catatan": st.column_config.TextColumn("Catatan", width="large"),
-            "Tgl Update": st.column_config.TextColumn("Tgl Update", width="small"),
-        },
-        disabled=[c for c in df_display.columns if c not in ("Pilih",)],
-        hide_index=True,
-        use_container_width=True,
-        key="bulk_editor",
-    )
+    # ── Form prevents rerender on checkbox ───────────────────────────────
+    with st.form(key="bulk_form", border=False):
+        edited_df = st.data_editor(
+            df_display,
+            column_config={
+                "Pilih": st.column_config.CheckboxColumn("Pilih", default=True, width="small"),
+                "Status": st.column_config.TextColumn("Status", width="medium"),
+                "Catatan": st.column_config.TextColumn("Catatan", width="large"),
+                "Tgl Update": st.column_config.TextColumn("Tgl Update", width="small"),
+            },
+            disabled=[c for c in df_display.columns if c not in ("Pilih",)],
+            hide_index=True,
+            use_container_width=True,
+        )
 
-    # Sync "Pilih" back to validated
-    for idx in range(len(validated)):
-        validated[idx]["selected"] = bool(edited_df.iloc[idx]["Pilih"])
-    st.session_state.bulk_validated = validated
+        # Sync "Pilih" back to validated (inside form, no immediate rerun)
+        for idx in range(len(validated)):
+            validated[idx]["selected"] = bool(edited_df.iloc[idx]["Pilih"])
+        st.session_state.bulk_validated = validated
 
-    # ── Promo warnings ──────────────────────────────────────────────────
-    promo_rows = [r for r in validated if r["has_active_promo"]]
-    if promo_rows:
-        if st.toggle("🔓 Tampilkan produk dengan promo", key="show_promo_toggle"):
-            with st.expander(f"⚠️ {len(promo_rows)} Produk dengan Promo Aktif", expanded=True):
-                for r in promo_rows:
-                    tgl_hint = ""
-                    if r.get("tanggal_update"):
-                        tgl_hint = f" — Rencana naik: {_fmt_date(r['tanggal_update'])}"
-                    st.warning(
-                        f"**{r['barcode']}** — {r['name']}: {r['promo_warning']}{tgl_hint}",
-                        icon="⚠️",
-                    )
-
-    # ── Execute ─────────────────────────────────────────────────────────
-    ready = [r for r in validated if r.get("selected") and not r.get("error") and r["found"]]
-    if not ready:
-        st.info("Tidak ada data dipilih untuk diupdate.")
-        return
-
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button(
+        # ── Execute button (single, inside form) ────────────────────────
+        ready = [r for r in validated if r.get("selected") and not r.get("error") and r["found"]]
+        form_submitted = st.form_submit_button(
             f"🚀 Update {len(ready)} Produk ke Odoo",
-            type="primary", use_container_width=True,
-        ):
-            with st.spinner("Mengupdate harga ke Odoo..."):
-                try:
-                    result = service.execute_updates(validated)
-                    st.success(f"✅ {result['success']} produk berhasil diupdate!")
-                    if result.get("errors"):
-                        for barcode, err in result["errors"]:
-                            st.error(f"{barcode}: {err}")
-                    if result.get("warnings"):
-                        for bc, warn in result["warnings"]:
-                            st.warning(f"{bc}: {warn}")
-                    if result["skipped"] > 0:
-                        st.info(f"⏭️ {result['skipped']} baris dilewati.")
-                    # ── Auto-schedule promo products ───────────────────
-                    promo_rows = [r for r in validated if r["has_active_promo"] and r["template_id"]]
-                    if promo_rows:
-                        from datetime import timedelta
-                        from logic.schedule_storage import ScheduleStorage
-                        sched_rows = []
-                        for r in promo_rows:
-                            tgl_r = r.get("tanggal_update", "")
-                            if tgl_r and tgl_r > date.today().isoformat():
-                                sched_rows.append({
-                                    "barcode": r["barcode"],
-                                    "name": r["name"],
-                                    "sales_price": r["sales_price"],
-                                    "fixed_price": r.get("fixed_price"),
-                                    "tanggal_update": tgl_r,
-                                    "template_id": r["template_id"],
-                                    "has_fixed_price": r.get("has_fixed_price", False),
-                                })
-                        if sched_rows:
-                            ScheduleStorage().save(sched_rows, label=f"Promo massal — {date.today().isoformat()}")
-                            st.info(f"📅 {len(sched_rows)} produk promo dijadwalkan naik otomatis.")
-                    st.session_state.bulk_validated = validated
-                except Exception as e:
-                    st.error(f"Gagal: {e}")
+            type="primary",
+            use_container_width=True,
+        )
 
-    with col2:
-        # ── Save as scheduled if any have future tanggal_update ──────────
-        # Use ALL validated (not just ready-selected) so promo rows also get scheduled
-        future_rows = [r for r in validated if r.get("tanggal_update") and r["tanggal_update"] > date.today().isoformat()]
-        if future_rows:
-            if st.button(
-                f"📅 Jadwalkan {len(future_rows)} Produk",
-                use_container_width=True,
-            ):
-                name = service.save_scheduled(validated)
-                if name:
-                    st.success(f"✅ Disimpan sebagai `{name}` di Odoo — "
-                               f"{len(future_rows)} produk akan diupdate otomatis.")
-                else:
-                    st.info("Tidak ada produk dengan tanggal masa depan untuk dijadwalkan.")
+    if form_submitted:
+        if not ready:
+            st.info("Tidak ada data dipilih untuk diupdate.")
+            return
+        with st.spinner("Mengupdate harga ke Odoo..."):
+            try:
+                result = service.execute_updates(validated)
+                st.success(f"✅ {result['success']} produk berhasil diupdate!")
+                if result.get("errors"):
+                    for barcode, err in result["errors"]:
+                        st.error(f"{barcode}: {err}")
+                if result.get("warnings"):
+                    for bc, warn in result["warnings"]:
+                        st.warning(f"{bc}: {warn}")
+                if result["skipped"] > 0:
+                    st.info(f"⏭️ {result['skipped']} baris dilewati.")
+                # ── Auto-schedule promo products ───────────────────
+                promo_rows = [r for r in validated if r["has_active_promo"] and r["template_id"] and r.get("selected")]
+                if promo_rows:
+                    sched_rows = []
+                    for r in promo_rows:
+                        tgl_r = r.get("tanggal_update", "")
+                        if tgl_r and tgl_r > date.today().isoformat():
+                            sched_rows.append({
+                                "barcode": r["barcode"],
+                                "name": r["name"],
+                                "sales_price": r["sales_price"],
+                                "fixed_price": r.get("fixed_price"),
+                                "tanggal_update": tgl_r,
+                                "template_id": r["template_id"],
+                                "has_fixed_price": r.get("has_fixed_price", False),
+                            })
+                    if sched_rows:
+                        from logic.schedule_storage import ScheduleStorage
+                        ScheduleStorage().save(sched_rows, label=f"Promo massal — {date.today().isoformat()}")
+                        st.info(f"📅 {len(sched_rows)} produk promo dijadwalkan naik otomatis setelah berakhir.")
+            except Exception as e:
+                st.error(f"Gagal: {e}")
 
 
 def _render_scheduled_section(service: BulkPriceUpdateService) -> None:

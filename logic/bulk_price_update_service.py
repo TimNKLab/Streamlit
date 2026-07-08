@@ -291,7 +291,7 @@ class BulkPriceUpdateService:
                     f"(sehari setelah promo berakhir)."
                 )
                 out["status"] = "⚠️ Promo Aktif"
-                out["selected"] = False
+                out["selected"] = True
             else:
                 out["selected"] = True
                 out["status"] = "✅ Siap"
